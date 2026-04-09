@@ -12,8 +12,12 @@
   :root{
     --bg1:#faf8ff;
     --bg2:#f6fbff;
-    --app-height:100vh;
+    --app-height:100dvh;
     --dock-clearance:54px;
+    --safe-top:max(env(safe-area-inset-top), 0px);
+    --safe-right:max(env(safe-area-inset-right), 0px);
+    --safe-bottom:max(env(safe-area-inset-bottom), 0px);
+    --safe-left:max(env(safe-area-inset-left), 0px);
 
     --text:#111827;
     --muted:#6b7280;
@@ -37,7 +41,10 @@
   }
 
   *{ box-sizing:border-box; }
-  html,body{ height:100%; }
+  html,body{
+    min-height:100%;
+    height:100%;
+  }
   body{
     min-height:var(--app-height);
     margin:0;
@@ -51,12 +58,16 @@
     display:flex;
     align-items:center;
     justify-content:center;
-    padding: 24px 24px 110px;
+    padding: calc(24px + var(--safe-top)) calc(24px + var(--safe-right)) calc(110px + var(--safe-bottom)) calc(24px + var(--safe-left));
+    overflow:auto;
+  }
+  body.view-chat,
+  body.view-report{
     overflow:hidden;
   }
   body.view-chat,
   body.view-report{
-    padding-bottom:24px;
+    padding-bottom:calc(24px + var(--safe-bottom));
   }
 
   /* soft background blobs */
@@ -91,6 +102,7 @@
     justify-content:center;
     align-items:stretch;
     z-index:1;
+    overflow:auto;
   }
   .card{
     width:100%;
@@ -356,15 +368,18 @@
     z-index:5;
     display:none;
     background:white;
+    min-height:calc(var(--app-height) - var(--dock-clearance));
   }
   .chatHeader{
     height:64px;
     display:flex;
     align-items:center;
     justify-content:space-between;
-    padding:0 16px;
+    padding: max(0px, var(--safe-top)) calc(16px + var(--safe-right)) 0 calc(16px + var(--safe-left));
     border-bottom:1px solid #e5e7eb;
     background:white;
+    min-height:calc(64px + var(--safe-top));
+    gap:12px;
   }
   .chatHeader .left{
     display:flex;
@@ -392,6 +407,7 @@
     display:flex;
     gap:10px;
     align-items:center;
+    flex-shrink:0;
   }
   .miniBtn{
     height:38px;
@@ -426,13 +442,15 @@
 
   .chatBody{
     position:absolute;
-    top:64px;
-    bottom:74px;
+    top:calc(64px + var(--safe-top));
+    bottom:calc(74px + var(--safe-bottom));
     left:0;
     right:0;
     overflow:auto;
     background:white;
-    padding:18px 14px;
+    padding:18px calc(14px + var(--safe-right)) 18px calc(14px + var(--safe-left));
+    -webkit-overflow-scrolling:touch;
+    overscroll-behavior:contain;
   }
 
   .bubbleRow{
@@ -498,8 +516,8 @@
   .chatInputBar{
     position:absolute;
     left:0; right:0; bottom:0;
-    height:74px;
-    padding:12px 12px;
+    min-height:74px;
+    padding:12px calc(12px + var(--safe-right)) calc(12px + var(--safe-bottom)) calc(12px + var(--safe-left));
     border-top:1px solid #e5e7eb;
     background:white;
     display:flex;
@@ -514,9 +532,11 @@
     padding:0 16px;
     font-size:14px;
     outline:none;
+    min-width:0;
   }
   .sendBtn{
     width:98px;
+    min-width:86px;
     height:48px;
     border-radius:999px;
     border:none;
@@ -538,7 +558,7 @@
     backdrop-filter: blur(40px);
     overflow:auto;
     z-index:20;
-    padding:40px 20px;
+    padding:calc(40px + var(--safe-top)) calc(20px + var(--safe-right)) calc(40px + var(--safe-bottom)) calc(20px + var(--safe-left));
   }
   .reportCard{
     max-width:1120px;
@@ -554,7 +574,7 @@
     left:50%;
     bottom:0;
     transform:translateX(-50%);
-    width:min(860px, calc(100% - 24px));
+    width:min(860px, calc(100% - 24px - var(--safe-left) - var(--safe-right)));
     z-index:12;
     pointer-events:none;
   }
@@ -858,18 +878,94 @@
     :root{
       --dock-clearance:50px;
     }
-    body{ padding: 18px 18px 104px; }
+    body{
+      align-items:stretch;
+      justify-content:flex-start;
+      padding: calc(12px + var(--safe-top)) calc(12px + var(--safe-right)) calc(96px + var(--safe-bottom)) calc(12px + var(--safe-left));
+    }
     .wrap{ min-height:calc(var(--app-height) - 122px); }
-    .content{ padding: 28px 22px 22px 22px; }
+    .content{ padding: 24px 18px 18px 18px; }
+    .card{
+      border-radius:28px;
+    }
     .brand h1{ font-size: 40px; }
     .auviraMark{ font-size: 34px; }
     .auviraSub{ font-size: 9px; max-width: 280px; }
     .row2{ grid-template-columns: 1fr; }
     .domainGrid{ grid-template-columns: 1fr; }
-    .chatHeader{ height:70px; padding:0 12px; }
-    .chatBody{ top:70px; bottom:78px; }
-    .chatInputBar{ height:78px; }
-    .sendBtn{ width:86px; font-size:11px; }
+    .chatHeader{
+      min-height:calc(78px + var(--safe-top));
+      height:auto;
+      align-items:flex-start;
+      padding-top:calc(10px + var(--safe-top));
+      padding-bottom:10px;
+    }
+    .chatHeader .left{
+      flex:1;
+      min-width:0;
+    }
+    .chatTitle{
+      font-size:14px;
+      white-space:normal;
+      line-height:1.25;
+    }
+    .chatSub{
+      font-size:10px;
+      white-space:normal;
+      line-height:1.25;
+    }
+    .headerBtns{
+      gap:8px;
+      align-self:flex-start;
+    }
+    .miniBtn{
+      height:36px;
+      padding:0 10px;
+      font-size:11px;
+      letter-spacing:0.03em;
+    }
+    .chatBody{
+      top:calc(88px + var(--safe-top));
+      bottom:calc(92px + var(--safe-bottom));
+      padding:14px calc(10px + var(--safe-right)) 14px calc(10px + var(--safe-left));
+    }
+    .bubble{
+      max-width:92%;
+      font-size:13px;
+      padding:12px 13px;
+    }
+    .contextBubble{
+      font-size:14px;
+      padding:12px 14px;
+    }
+    .chatInputBar{
+      min-height:92px;
+      align-items:flex-end;
+      gap:8px;
+    }
+    .chatInput{
+      height:46px;
+      font-size:13px;
+      padding:0 14px;
+    }
+    .sendBtn{
+      width:82px;
+      min-width:82px;
+      font-size:11px;
+      letter-spacing:0.08em;
+    }
+    .reportWrap{
+      padding:calc(16px + var(--safe-top)) calc(10px + var(--safe-right)) calc(16px + var(--safe-bottom)) calc(10px + var(--safe-left));
+    }
+    .reportCard{
+      padding:18px;
+      border-radius:22px;
+    }
+    table{
+      display:block;
+      overflow-x:auto;
+      white-space:nowrap;
+    }
   }
   @media (max-width: 640px){
     .auvira-dock-wrap{
@@ -908,6 +1004,183 @@
     body.view-chat .auvira-dock:hover,
     body.view-chat .auvira-dock.open{
       height:50px;
+    }
+  }
+  @media (min-width: 521px) and (max-width: 820px){
+    body{
+      align-items:stretch;
+      justify-content:flex-start;
+    }
+    .content{
+      padding:32px 24px 24px;
+    }
+    .chatHeader{
+      min-height:calc(72px + var(--safe-top));
+      padding-top:max(0px, var(--safe-top));
+    }
+    .chatBody{
+      top:calc(72px + var(--safe-top));
+      bottom:calc(82px + var(--safe-bottom));
+      padding:16px calc(16px + var(--safe-right)) 16px calc(16px + var(--safe-left));
+    }
+    .chatInputBar{
+      min-height:82px;
+    }
+    .bubble{
+      max-width:88%;
+      font-size:14px;
+    }
+    .reportCard{
+      padding:28px;
+    }
+  }
+  @media (max-height: 860px){
+    body{
+      align-items:stretch;
+      justify-content:flex-start;
+      padding-top:calc(16px + var(--safe-top));
+      padding-bottom:calc(92px + var(--safe-bottom));
+    }
+    .wrap{
+      min-height:auto;
+      max-height:calc(var(--app-height) - 108px);
+    }
+    .card{
+      min-height:auto;
+    }
+    .content{
+      justify-content:flex-start;
+      padding-top:30px;
+      padding-bottom:24px;
+    }
+    .brand{
+      margin-bottom:20px;
+    }
+    .chatHeader{
+      min-height:calc(60px + var(--safe-top));
+      height:auto;
+    }
+    .chatBody{
+      top:calc(60px + var(--safe-top));
+      padding-top:14px;
+      padding-bottom:14px;
+    }
+    .chatInputBar{
+      min-height:70px;
+      padding-top:10px;
+    }
+  }
+  @media (max-height: 720px){
+    :root{
+      --dock-clearance:48px;
+    }
+    body{
+      padding:calc(10px + var(--safe-top)) calc(10px + var(--safe-right)) calc(82px + var(--safe-bottom)) calc(10px + var(--safe-left));
+    }
+    .wrap{
+      max-height:calc(var(--app-height) - 92px);
+    }
+    .content{
+      padding:22px 18px 18px;
+      gap:0;
+    }
+    .brand h1{
+      font-size:clamp(34px, 6vw, 60px);
+    }
+    .auviraMark{
+      font-size:36px;
+    }
+    .sectionTitle{
+      margin-top:12px;
+      margin-bottom:8px;
+    }
+    .input{
+      height:52px;
+      font-size:14px;
+    }
+    .pill{
+      height:48px;
+      font-size:11px;
+      letter-spacing:0.1em;
+    }
+    .cta{
+      height:54px;
+      margin-top:18px;
+      font-size:12px;
+      letter-spacing:0.14em;
+    }
+    .footerHint{
+      margin-top:10px;
+    }
+    .chatHeader{
+      min-height:calc(56px + var(--safe-top));
+      padding-left:calc(12px + var(--safe-left));
+      padding-right:calc(12px + var(--safe-right));
+    }
+    .chatTitle{
+      font-size:14px;
+    }
+    .chatSub{
+      font-size:10px;
+    }
+    .miniBtn{
+      height:34px;
+      padding:0 10px;
+      font-size:11px;
+    }
+    .chatBody{
+      top:calc(56px + var(--safe-top));
+      bottom:calc(70px + var(--safe-bottom));
+      padding:12px calc(10px + var(--safe-right)) 12px calc(10px + var(--safe-left));
+    }
+    .bubble{
+      font-size:13px;
+      padding:11px 13px;
+      line-height:1.4;
+    }
+    .contextBubble{
+      font-size:14px;
+      padding:10px 14px;
+    }
+    .chatInputBar{
+      min-height:70px;
+      gap:8px;
+      padding:10px calc(10px + var(--safe-right)) calc(10px + var(--safe-bottom)) calc(10px + var(--safe-left));
+    }
+    .chatInput,
+    .sendBtn{
+      height:44px;
+    }
+    .sendBtn{
+      width:84px;
+      min-width:84px;
+      font-size:11px;
+    }
+    .reportWrap{
+      padding:calc(12px + var(--safe-top)) calc(10px + var(--safe-right)) calc(12px + var(--safe-bottom)) calc(10px + var(--safe-left));
+    }
+    .reportCard{
+      padding:20px;
+      border-radius:24px;
+    }
+    .auvira-dock-wrap{
+      width:min(860px, calc(100% - 12px - var(--safe-left) - var(--safe-right)));
+    }
+    .auvira-dock{
+      height:48px;
+      border-radius:18px 18px 0 0;
+    }
+    .auvira-dock:hover,
+    .auvira-dock.open{
+      height:118px;
+    }
+    .auvira-collapsed{
+      height:48px;
+    }
+    body.view-chat .auvira-dock,
+    body.view-chat .auvira-dock:hover,
+    body.view-chat .auvira-dock.open{
+      height:48px;
     }
   }
   @media (max-width: 900px){
@@ -1063,7 +1336,8 @@ function nowISO() { return new Date().toLocaleString(); }
 function norm(s) { return String(s || "").toLowerCase().trim().replace(/[^\p{L}\p{N}\s,?!.'-]/gu, " ").replace(/\s+/g, " ").trim(); }
 function escapeHTML(s) { return String(s).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;"); }
 function syncViewportHeight() {
-  document.documentElement.style.setProperty("--app-height", `${window.innerHeight}px`);
+  const viewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+  document.documentElement.style.setProperty("--app-height", `${Math.round(viewportHeight)}px`);
 }
 
 const NORMALIZATION_MAP = [
@@ -6793,10 +7067,29 @@ function reportStyles() {
     @media (max-width: 760px){
       body{padding:18px}
       .report-head{padding:24px;flex-direction:column}
+      .report-actions{width:100%;justify-content:flex-start}
       .profile-grid{grid-template-columns:1fr}
       .scoreVal{font-size:68px}
       .section-score-grid{grid-template-columns:1fr 1fr}
       .block{padding:22px}
+      table{display:block;overflow-x:auto;white-space:nowrap}
+    }
+    @media (max-width: 560px){
+      body{padding:14px}
+      .report-head{padding:20px;border-radius:24px}
+      h1{font-size:28px}
+      .lede{font-size:13px}
+      .block{padding:18px;border-radius:22px}
+      .scoreVal{font-size:58px}
+      .section-score-grid{grid-template-columns:1fr}
+      th,td{padding:10px 12px;font-size:12px}
+      .rBtn{height:38px;padding:0 12px;font-size:11px}
+    }
+    @media (max-height: 760px){
+      body{padding:16px}
+      .report-head{padding:22px}
+      .block{padding:20px}
+      .scoreVal{font-size:72px}
     }
     @media print{
       body{padding:0;background:white}
@@ -6902,6 +7195,10 @@ syncViewportHeight();
 updateEndButtonState();
 window.addEventListener("resize", syncViewportHeight);
 window.addEventListener("orientationchange", syncViewportHeight);
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", syncViewportHeight);
+  window.visualViewport.addEventListener("scroll", syncViewportHeight);
+}
 
 const dock = document.getElementById("auviraDock");
 if (dock) {
