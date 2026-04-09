@@ -405,12 +405,12 @@
     max-width:100vw;
     z-index:5;
     display:none;
+    flex-direction:column;
     background:white;
     min-height:calc(var(--app-height) - var(--dock-clearance));
     overflow:hidden;
   }
   .chatHeader{
-    height:64px;
     display:flex;
     align-items:center;
     justify-content:space-between;
@@ -419,6 +419,8 @@
     background:white;
     min-height:calc(64px + var(--safe-top));
     gap:12px;
+    flex-shrink:0;
+    z-index:2;
   }
   .chatHeader .left{
     display:flex;
@@ -480,11 +482,8 @@
   }
 
   .chatBody{
-    position:absolute;
-    top:calc(64px + var(--safe-top));
-    bottom:calc(74px + var(--safe-bottom));
-    left:0;
-    right:0;
+    flex:1;
+    min-height:0;
     overflow:auto;
     background:white;
     padding:18px calc(14px + var(--safe-right)) 18px calc(14px + var(--safe-left));
@@ -553,8 +552,7 @@
   }
 
   .chatInputBar{
-    position:absolute;
-    left:0; right:0; bottom:0;
+    flex-shrink:0;
     min-height:74px;
     padding:12px calc(12px + var(--safe-right)) calc(12px + var(--safe-bottom)) calc(12px + var(--safe-left));
     border-top:1px solid #e5e7eb;
@@ -562,6 +560,7 @@
     display:flex;
     gap:10px;
     align-items:center;
+    z-index:2;
   }
   .chatInput{
     flex:1;
@@ -980,7 +979,6 @@
     }
     .chatHeader{
       min-height:calc(94px + var(--safe-top));
-      height:auto;
       flex-direction:column;
       align-items:stretch;
       justify-content:flex-start;
@@ -1013,8 +1011,6 @@
       letter-spacing:0.03em;
     }
     .chatBody{
-      top:calc(108px + var(--safe-top));
-      bottom:calc(86px + var(--safe-bottom));
       padding:12px calc(10px + var(--safe-right)) 12px calc(10px + var(--safe-left));
     }
     .bubble{
@@ -1078,8 +1074,6 @@
       letter-spacing:0.03em;
     }
     .chatBody{
-      top:calc(112px + var(--safe-top));
-      bottom:calc(92px + var(--safe-bottom));
       padding:14px calc(10px + var(--safe-right)) 14px calc(10px + var(--safe-left));
     }
     .bubble{
@@ -1175,8 +1169,6 @@
       padding-top:max(0px, var(--safe-top));
     }
     .chatBody{
-      top:calc(72px + var(--safe-top));
-      bottom:calc(82px + var(--safe-bottom));
       padding:16px calc(16px + var(--safe-right)) 16px calc(16px + var(--safe-left));
     }
     .chatInputBar{
@@ -1214,10 +1206,8 @@
     }
     .chatHeader{
       min-height:calc(60px + var(--safe-top));
-      height:auto;
     }
     .chatBody{
-      top:calc(60px + var(--safe-top));
       padding-top:14px;
       padding-bottom:14px;
     }
@@ -1285,8 +1275,6 @@
       font-size:11px;
     }
     .chatBody{
-      top:calc(56px + var(--safe-top));
-      bottom:calc(70px + var(--safe-bottom));
       padding:12px calc(10px + var(--safe-right)) 12px calc(10px + var(--safe-left));
     }
     .bubble{
@@ -1482,10 +1470,27 @@ let appState = {
   lastIntentKey: null,
   lastClassification: null,
   lastComplaint: null,
-  disclosed: new Set()
+  disclosed: new Set(),
+  consecutiveFallback: 0
 };
-const UNCLEAR_HISTORY_REPLY = "Please ask history relevent questions.";
-const EARLY_DETAIL_REPLY = "Doctor, pehle meri current problem pooch lein.";
+const UNCLEAR_REPLIES = [
+  "Doctor sahab, mujhe samajh nahi aaya. Zara aasan lafzon mein poochein?",
+  "Doctor, yeh baat mujhe samajh nahi aayi. Kya aap repeat kar sakte hain?",
+  "Sorry doctor, mujhe clear nahi hua. Doosre tareeqe se poochein?",
+  "Doctor, main samjha nahi. Kuch aur poochein jo meri problem se related ho.",
+  "Ji doctor? Zara dobara poochein, mujhe samajh nahi aaya.",
+  "I'm sorry doctor, I didn't understand. Could you ask that differently?",
+  "Doctor sahab, please thora aasan poochein, meri samajh mein nahi aaya."
+];
+const EARLY_DETAIL_REPLIES = [
+  "Doctor, pehle meri problem sun lein na. Phir detail mein poochein.",
+  "Doctor sahab, abhi main apni takleef batana chahta hoon. Pehle woh pooch lein.",
+  "Ji doctor, pehle meri shikayat pooch lein, phir detail mein baat karte hain.",
+  "Doctor, please pehle poochein mujhe kya hua hai, phir baqi detail.",
+  "Pehle mujh se poochein main yahan kyun aaya hoon, phir baat aagay barhate hain."
+];
+function getUnclearReply() { return UNCLEAR_REPLIES[Math.floor(Math.random() * UNCLEAR_REPLIES.length)]; }
+function getEarlyDetailReply() { return EARLY_DETAIL_REPLIES[Math.floor(Math.random() * EARLY_DETAIL_REPLIES.length)]; }
 
 function rand(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 function nowISO() { return new Date().toLocaleString(); }
@@ -1568,6 +1573,46 @@ function normalizeInput(text) {
     [/\bdawa\b/g, "medicine"],
     [/\bdawai\b/g, "medicine"],
     [/\bdawaiyan\b/g, "medicine"],
+    [/\bdawaian\b/g, "medicine"],
+    [/\bbatao\b/g, "tell"],
+    [/\bbatayein\b/g, "tell"],
+    [/\bbatain\b/g, "tell"],
+    [/\bbtao\b/g, "tell"],
+    [/\bbtaein\b/g, "tell"],
+    [/\bbtain\b/g, "tell"],
+    [/\bpoochna\b/g, "ask"],
+    [/\bpuchna\b/g, "ask"],
+    [/\bpuchein\b/g, "ask"],
+    [/\bpoochein\b/g, "ask"],
+    [/\bkidr\b/g, "kidhar"],
+    [/\bkdhr\b/g, "kidhar"],
+    [/\bkahan\b/g, "kahan"],
+    [/\bkhan\b/g, "kahan"],
+    [/\bkitnay\b/g, "kitne"],
+    [/\bkitney\b/g, "kitne"],
+    [/\bproblem\b/g, "problem"],
+    [/\bprblm\b/g, "problem"],
+    [/\bprob\b/g, "problem"],
+    [/\bhospital\b/g, "hospital"],
+    [/\bhsptal\b/g, "hospital"],
+    [/\bpareshani\b/g, "problem"],
+    [/\btakleef\b/g, "complaint"],
+    [/\btklf\b/g, "complaint"],
+    [/\bshikayat\b/g, "complaint"],
+    [/\bshkayt\b/g, "complaint"],
+    [/\bkab\b/g, "kab"],
+    [/\bkb\b/g, "kab"],
+    [/\bkyun\b/g, "why"],
+    [/\bkyu\b/g, "why"],
+    [/\bkyn\b/g, "why"],
+    [/\bkia\b/g, "kya"],
+    [/\bkiya\b/g, "kya"],
+    [/\baye\b/g, "aye"],
+    [/\baey\b/g, "aye"],
+    [/\baai\b/g, "aayi"],
+    [/\baaye\b/g, "aye"],
+    [/\bhon\b/g, "hoon"],
+    [/\bhun\b/g, "hoon"],
     [/\bmedicatio\b/g, "medicine"],
     [/\bmedicat\b/g, "medicine"],
     [/\bmedicin\b/g, "medicine"],
@@ -1669,7 +1714,7 @@ function phraseMatches(text, pattern) {
 function splitIntentClauses(text) {
   const normalized = normalizeInput(text);
   const parts = normalized
-    .split(/\s*(?:,|\?| and | aur | ya | or | & )\s*/gi)
+    .split(/\s*(?:,|\?|\.|;| and | aur | ya | or | & | bhi | also | plus )\s*/gi)
     .map(part => normalizeInput(part))
     .filter(Boolean);
   return parts.length ? parts : [normalized];
@@ -3777,9 +3822,9 @@ function buildCase(domain) {
   const localizedComplaintReveal = localizeRubricValue(template.complaintReveal);
   const complaintProfile = buildComplaintSpecificProfile(domain, template.complaint);
   const rubricAnswers = {
-    greeting_ack: { english: "Hello.", roman: "Assalam o alaikum." },
-    introduction_ack: { english: "Yes doctor.", roman: "Ji doctor." },
-    consent_ack: { english: "Yes doctor.", roman: "Ji doctor." },
+    greeting_ack: { english: rand(["Hello doctor, walaikum assalam.", "Hello doctor, thank you for seeing me.", "Walaikum assalam doctor sahab.", "Ji hello doctor."]), roman: rand(["Walaikum assalam doctor sahab.", "Ji doctor, assalam o alaikum.", "Walaikum assalam, shukriya doctor milay.", "Ji doctor sahab, walaikum assalam."]) },
+    introduction_ack: { english: rand(["Nice to meet you, doctor.", "Thank you doctor. I am glad you are here.", "Yes doctor, thank you.", "Ji doctor, shukriya."]), roman: rand(["Ji doctor sahab, shukriya aap ke milne ka.", "Acha doctor, shukriya.", "Ji doctor, bohat meherbani.", "Shukriya doctor sahab."]) },
+    consent_ack: { english: rand(["Yes doctor, please go ahead. I will answer whatever I can.", "Yes of course doctor, you can ask me anything.", "Sure doctor, please ask whatever you need to know.", "Ji doctor, zaroor poochein."]), roman: rand(["Ji doctor, zaroor poochein. Main sab jawab doonga.", "Haan doctor sahab, poochein jo poochna hai. Main batata hoon.", "Ji bilkul, aap poochein. Main poori tarah se cooperate karoonga.", "Haan ji doctor, aap befikr ho kar poochein."]) },
     name: {
       english: isCaregiver ? `My child's name is ${biodataName}.` : `My name is ${biodataName}.`,
       roman: isCaregiver ? `Mere bache ka naam ${biodataName} hai.` : `Mera naam ${biodataName} hai.`
@@ -4892,7 +4937,7 @@ const INTENT_TO_CASE_FIELDS = {
 };
 
 const INTENT_MAP = {
-  greeting: [["hello"], ["hi"], ["assalam"], ["salam"], ["good", "morning"], ["good", "evening"]],
+  greeting: [["hello"], ["hi"], ["assalam"], ["salam"], ["good", "morning"], ["good", "evening"], ["aoa"], ["aadab"], ["greetings"], ["good", "afternoon"]],
   introduction: [
     ["i", "am", "dr"],
     ["i", "am", "doctor"],
@@ -4917,11 +4962,11 @@ const INTENT_MAP = {
     ["can", "we", "start"],
     ["shall", "we", "start"]
   ],
-  name: [["name"], ["naam"], ["good", "name"], ["patient", "name"]],
-  age: [["age"], ["umar"], ["how", "old"], ["kitni", "age"], ["kitni", "umar"]],
-  gender: [["gender"], ["male", "female"], ["sex"]],
-  address: [["address"], ["where", "from"], ["kahan", "se"], ["kis", "shehar"]],
-  occupation: [["occupation"], ["job"], ["kaam"], ["pesha"]],
+  name: [["name"], ["naam"], ["good", "name"], ["patient", "name"], ["your", "good", "name"], ["apka", "naam"], ["ap", "ka", "naam"]],
+  age: [["age"], ["umar"], ["how", "old"], ["kitni", "age"], ["kitni", "umar"], ["umr"], ["kitne", "saal"], ["years", "old"]],
+  gender: [["gender"], ["male", "female"], ["sex"], ["mard", "aurat"]],
+  address: [["address"], ["where", "from"], ["kahan", "se"], ["kis", "shehar"], ["kahan", "rehte"], ["kahan", "rahte"], ["shehar"], ["city"], ["gao"], ["gaon"]],
+  occupation: [["occupation"], ["job"], ["kaam"], ["pesha"], ["kya", "karte"], ["work", "kya"], ["karobar"], ["naukri"]],
   chief_complaint: [
     ["why", "here"],
     ["why", "you", "came"],
@@ -4932,15 +4977,27 @@ const INTENT_MAP = {
     ["kya", "masla"],
     ["kya", "problem"],
     ["kya", "hua"],
+    ["complaint", "kya"],
     ["takleef", "kya"],
+    ["kya", "takleef"],
+    ["kya", "shikayat"],
+    ["shikayat", "kya"],
     ["kyun", "aye"],
     ["kyu", "aye"],
     ["kis", "liye", "aye"],
     ["hospital", "kyun", "aye"],
-    ["what", "brings", "you", "today"]
+    ["what", "brings", "you", "today"],
+    ["what", "happened"],
+    ["kya", "ho", "gaya"],
+    ["tabiyat", "kaisi"],
+    ["how", "are", "you", "feeling"],
+    ["kaise", "ho"],
+    ["kaisi", "ho"],
+    ["tabiyat"],
+    ["kya", "pareshani"]
   ],
-  onset: [["when", "start"], ["when", "began"], ["kab", "hua"], ["kab", "shuru"], ["how", "started"], ["onset"], ["kab", "hua", "yeh"], ["when", "did", "this", "happen"], ["when", "did", "fever", "start"], ["when", "did", "cough", "start"], ["when", "did", "vomiting", "start"]],
-  duration: [["kab", "se"], ["since", "when"], ["how", "long"], ["kitne", "din"], ["kitne", "arse"], ["kitne", "ghante"], ["for", "how", "many", "days"], ["for", "how", "many", "hours"], ["how", "many", "days", "se"], ["from", "when"]],
+  onset: [["when", "start"], ["when", "began"], ["kab", "hua"], ["kab", "shuru"], ["how", "started"], ["onset"], ["kab", "hua", "yeh"], ["when", "did", "this", "happen"], ["when", "did", "fever", "start"], ["when", "did", "cough", "start"], ["when", "did", "vomiting", "start"], ["kaise", "shuru"], ["kab", "start"], ["start", "kab"], ["shuru", "kab"], ["pehli", "dafa", "kab"]],
+  duration: [["kab", "se"], ["since", "when"], ["how", "long"], ["kitne", "din"], ["kitne", "arse"], ["kitne", "ghante"], ["for", "how", "many", "days"], ["for", "how", "many", "hours"], ["how", "many", "days", "se"], ["from", "when"], ["kitni", "dair"], ["kitna", "arsa"], ["kitne", "waqt"], ["arse", "se"], ["din", "se"]],
   progression: [
     ["getting", "worse"],
     ["is", "it", "increasing"],
@@ -4957,12 +5014,14 @@ const INTENT_MAP = {
     ["how", "often"],
     ["barhta", "ja", "raha"],
     ["same", "ya", "barh"],
-    ["kam", "ya", "zyada"]
+    ["kam", "ya", "zyada"],
+    ["behtar", "ya", "kharab"],
+    ["kya", "haal"]
   ],
-  pain_location: [["kahan"], ["kidhar"], ["where"], ["location"], ["kis", "jaga"], ["kis", "taraf"], ["which", "part"], ["exact", "location"], ["site"]],
-  radiation: [["spread"], ["phail"], ["fail"], ["move", "anywhere"], ["radiate"], ["kahin", "aur", "jata"], ["goes", "to", "arm"], ["goes", "to", "back"], ["peeth", "tak"], ["arm", "tak", "jata"], ["arm", "tak"], ["back", "tak"]],
-  pain_character: [["kis", "tarah"], ["kis", "trah"], ["kaisa"], ["kesa"], ["what", "kind"], ["type"], ["nature"], ["burning"], ["pressure"], ["qism"], ["stabbing"], ["sharp"], ["dull"], ["tightness"], ["crampy"], ["dry"], ["balgham"], ["productive"], ["phlegm"]],
-  severity: [["kitna"], ["kitni"], ["severity"], ["scale"], ["severe"], ["pain", "score"], ["out", "10"], ["how", "bad"], ["1", "10"], ["how", "high", "fever"], ["how", "much", "fever"], ["temperature", "kitna"], ["how", "much", "temperature"], ["max", "temperature"], ["kitna", "fever"], ["thermometer"]],
+  pain_location: [["kahan"], ["kidhar"], ["where"], ["location"], ["kis", "jaga"], ["kis", "taraf"], ["which", "part"], ["exact", "location"], ["site"], ["konsi", "jaga"], ["specific", "jaga"], ["jaga"]],
+  radiation: [["spread"], ["phail"], ["fail"], ["move", "anywhere"], ["radiate"], ["kahin", "aur", "jata"], ["goes", "to", "arm"], ["goes", "to", "back"], ["peeth", "tak"], ["arm", "tak", "jata"], ["arm", "tak"], ["back", "tak"], ["aur", "kahi", "jata"], ["kahin", "aur"], ["idhar", "udhar"]],
+  pain_character: [["kis", "tarah"], ["kis", "trah"], ["kaisa"], ["kesa"], ["what", "kind"], ["type"], ["nature"], ["burning"], ["pressure"], ["qism"], ["stabbing"], ["sharp"], ["dull"], ["tightness"], ["crampy"], ["dry"], ["balgham"], ["productive"], ["phlegm"], ["kaisa", "dard"], ["what", "type"], ["kaise"], ["describe"], ["batao", "kaisa"]],
+  severity: [["kitna"], ["kitni"], ["severity"], ["scale"], ["severe"], ["pain", "score"], ["out", "10"], ["how", "bad"], ["1", "10"], ["how", "high", "fever"], ["how", "much", "fever"], ["temperature", "kitna"], ["how", "much", "temperature"], ["max", "temperature"], ["kitna", "fever"], ["thermometer"], ["shadeed"], ["zyada", "hai"], ["tez", "hai"], ["how", "severe"], ["kitna", "tez"], ["kitna", "zyada"]],
   aggravating: [["barhta"], ["worse"], ["trigger"], ["increase"], ["worsens"], ["kis", "se", "zyada"], ["walking", "se"], ["movement", "se"], ["khane", "se"], ["breathing", "se"], ["on", "exertion"]],
   relieving: [
     ["kam"],
@@ -5096,7 +5155,7 @@ const INTENT_MAP = {
 
 const INTENT_PHRASES = {
   greeting: [
-    "hello", "hi", "assalam", "assalam o alaikum", "salam", "good morning", "good evening"
+    "hello", "hi", "assalam", "assalam o alaikum", "salam", "good morning", "good evening", "aoa", "good afternoon", "aadab", "greetings"
   ],
   introduction: [
     "i am dr", "i am doctor", "my name is dr", "i am your doctor", "main dr hoon", "main doctor hoon", "mein doctor hoon"
@@ -5117,10 +5176,10 @@ const INTENT_PHRASES = {
     "shall we start"
   ],
   name: [
-    "what is your name", "your name", "name please", "naam kya hai", "aap ka naam", "patient name"
+    "what is your name", "your name", "name please", "naam kya hai", "aap ka naam", "patient name", "your good name", "apna naam btaein", "naam batao", "naam btaein", "batao apna naam", "apka naam kya hai", "tell me your name"
   ],
   age: [
-    "what is your age", "how old are you", "your age", "age", "umar kya hai", "kitni age", "kitni umar"
+    "what is your age", "how old are you", "your age", "age", "umar kya hai", "kitni age", "kitni umar", "kitne saal ke ho", "kitne saal ki ho", "aap ki umar", "age kitni hai", "umar batao", "age batao"
   ],
   gender: [
     "what is your gender", "gender", "sex", "male or female"
@@ -5148,7 +5207,17 @@ const INTENT_PHRASES = {
     "kya masla hai",
     "kya masla ha",
     "aap ko kya takleef hai",
-    "kya hua hai"
+    "kya hua hai",
+    "kya shikayat hai",
+    "shikayat kya hai",
+    "aaj kya hua",
+    "kya pareshani hai",
+    "tabiyat kaisi hai",
+    "kya ho gaya",
+    "complaint kya hai",
+    "tell me your problem",
+    "whats wrong",
+    "kya bimari hai"
   ],
   onset: [
     "onset",
@@ -5312,7 +5381,7 @@ const INTENT_PHRASES = {
     "pregnancy ka chance hai", "could you be pregnant", "is pregnancy possible", "pregnant ho sakti hain"
   ],
   nausea_detail: [
-    "is there nausea", "do you have nausea", "subah matli hoti hai", "morning sickness", "matli hoti hai"
+    "is there nausea", "do you have nausea", "subah matli hoti hai", "morning sickness", "matli hoti hai", "ji ghabrata hai", "ulti aane ko karti hai"
   ],
   feeding_history: [
     "feeding history", "feeding", "how is feeding", "milk intake", "doodh peeta hai", "feed kaisa hai"
@@ -5360,7 +5429,13 @@ const INTENT_PHRASES = {
     "any regular medicine",
     "koi dawa lete hain",
     "kya koi treatment chal raha hai",
-    "koi dawa use karte hain"
+    "koi dawa use karte hain",
+    "koi medicine chalti hai",
+    "koi dawa chalti hai",
+    "medicine lete ho",
+    "dawa kha rahe ho",
+    "currently on any medicine",
+    "are you on treatment"
   ],
   allergies: [
     "are you allergic to anything", "any allergies", "allergy hai", "kisi dawa se allergy", "medicine allergy", "drug allergy"
@@ -5418,7 +5493,7 @@ const INTENT_PHRASES = {
     "any family history", "family history", "ghar mein kisi ko", "khandan mein kisi ko", "parents me kisi ko yeh masla"
   ],
   social_history: [
-    "do you smoke", "smoking history", "smoker", "cigarette", "alcohol history", "social history", "do you drink alcohol"
+    "do you smoke", "smoking history", "smoker", "cigarette", "alcohol history", "social history", "do you drink alcohol", "pan kha lete ho", "gutka", "niswar", "huqqa peete ho", "shisha", "nashe ka koi masla"
   ]
 };
 
@@ -6013,11 +6088,11 @@ function detectIntents(userText) {
 
 function validateIntentAgainstStage(intents, state) {
   if (!intents.length) {
-    return { ok: false, message: UNCLEAR_HISTORY_REPLY };
+    return { ok: false, message: getUnclearReply() };
   }
 
   if (!isComplaintKnown(state) && intents.some(intent => BLOCKED_BEFORE_COMPLAINT.has(intent))) {
-    return { ok: false, message: EARLY_DETAIL_REPLY };
+    return { ok: false, message: getEarlyDetailReply() };
   }
 
   return { ok: true };
@@ -6113,7 +6188,7 @@ function filterIntentsByFirstYearRubric(intents, state) {
 
 function generateStrictPatientReply(intents, state, activeCase, languageMode) {
   const uniqueIntents = [...new Set(intents.filter(Boolean))];
-  if (!uniqueIntents.length) return UNCLEAR_HISTORY_REPLY;
+  if (!uniqueIntents.length) return getUnclearReply();
 
   const responseOrder = [
     "greeting",
@@ -6195,7 +6270,21 @@ function generateStrictPatientReply(intents, state, activeCase, languageMode) {
     })
     .filter(Boolean))];
 
-  return replies.join(" ").trim() || UNCLEAR_HISTORY_REPLY;
+  // Add natural conversational connectors when joining multi-intent replies
+  if (replies.length <= 1) {
+    return replies.join(" ").trim() || getUnclearReply();
+  }
+  const romanConnectors = ["Aur ", "Iske alawa, ", "Aur doctor, ", "Sath mein, "];
+  const englishConnectors = ["Also, ", "And ", "Additionally, ", "And doctor, "];
+  const connectors = languageMode === "roman" ? romanConnectors : englishConnectors;
+  let combined = replies[0];
+  for (let i = 1; i < replies.length; i++) {
+    const connector = connectors[Math.floor(Math.random() * connectors.length)];
+    // Lowercase the first letter of the continuation reply for natural flow
+    const continuation = replies[i].charAt(0).toLowerCase() + replies[i].slice(1);
+    combined += " " + connector + continuation;
+  }
+  return combined.trim() || getUnclearReply();
 }
 
 function updateConversationStateFromIntents(intents, state, activeCase) {
@@ -6214,6 +6303,46 @@ function updateConversationStateFromIntents(intents, state, activeCase) {
 }
 
 function handleUserMessage(userText) {
+  const normalized = normalizeInput(userText);
+
+  // Context-aware follow-up handling: "aur?", "kuch aur?", "tell me more", "and?", etc.
+  const followUpPatterns = /^(aur|aur kya|kuch aur|aur bataein|aur batao|tell me more|anything else|go on|continue|phir|phir kya|aur sunao|haan phir|yes and|ok and|theek hai aur|theek aur|okay aur|okay and|aur koi|aur koi symptom|aur koi takleef)\??$/;
+  if (followUpPatterns.test(normalized) && isComplaintKnown(appState)) {
+    // Find undisclosed associated data to reveal
+    const possibleFollowups = [
+      "associated_symptoms", "fever_detail", "cough_detail", "vomiting_detail",
+      "bowel_detail", "headache_detail", "breathlessness_detail", "urinary_detail",
+      "chills_detail", "sweating_detail", "appetite_loss_detail", "wheeze_detail"
+    ];
+    const undisclosed = possibleFollowups.filter(intent =>
+      !appState.disclosed.has(intent) &&
+      appState.activeCase.rubricAnswers[intent] &&
+      isIntentSupportedByCurrentRubric(intent, appState)
+    );
+    if (undisclosed.length) {
+      const nextIntent = undisclosed[0];
+      const languageMode = detectReplyLanguage(userText);
+      const reply = getRubricAnswer(appState.activeCase, nextIntent, languageMode);
+      if (reply) {
+        appState.disclosed.add(nextIntent);
+        appState.lastIntentKey = nextIntent;
+        scoreQuestion(userText);
+        appState.historyQuestionCount += 1;
+        updateEndButtonState();
+        return reply;
+      }
+    }
+    // If all disclosed, give a natural "nothing else" response
+    return rand([
+      "Nahi doctor, aur kuch khas nahi hai.",
+      "Bas doctor, yehi sab hai. Baqi koi aur takleef nahi.",
+      "Aur kuch nahi doctor, bas yehi masla hai.",
+      "No doctor, I think that's about it.",
+      "Doctor sahab, mujhe aur kuch yaad nahi aa raha."
+    ]);
+  }
+
+  // Handle repeated questions gracefully
   const intents = detectIntents(userText, appState);
   const supportedIntents = filterIntentsByFirstYearRubric(intents, appState);
   appState.lastClassification = {
@@ -6224,12 +6353,18 @@ function handleUserMessage(userText) {
 
   const validation = validateIntentAgainstStage(intents, appState);
   if (!validation.ok) return validation.message;
-  if (!supportedIntents.length) return UNCLEAR_HISTORY_REPLY;
+  if (!supportedIntents.length) return getUnclearReply();
 
   const languageMode = detectReplyLanguage(userText);
   const reply = generateStrictPatientReply(supportedIntents, appState, appState.activeCase, languageMode);
-  if (reply && reply !== UNCLEAR_HISTORY_REPLY && reply !== EARLY_DETAIL_REPLY) {
+
+  // Check if it's a meaningful reply (not a fallback)
+  const isFallback = !reply || UNCLEAR_REPLIES.includes(reply) || EARLY_DETAIL_REPLIES.includes(reply);
+  if (!isFallback) {
     scoreQuestion(userText);
+    appState.consecutiveFallback = 0;
+  } else {
+    appState.consecutiveFallback += 1;
   }
   if (countHistoryQuestion(supportedIntents)) {
     appState.historyQuestionCount += 1;
@@ -6242,7 +6377,7 @@ function handleUserMessage(userText) {
     appState.disclosed.add(intent);
   });
 
-  return reply || UNCLEAR_HISTORY_REPLY;
+  return reply || getUnclearReply();
 }
 
 function answerFromCase(userText) {
@@ -6284,10 +6419,11 @@ function startSimulation() {
   appState.lastClassification = null;
   appState.lastComplaint = null;
   appState.disclosed = new Set();
+  appState.consecutiveFallback = 0;
   document.body.classList.remove("view-start", "view-report");
   document.body.classList.add("view-chat");
   document.getElementById("startWrap").style.display = "none";
-  document.getElementById("appShell").style.display = "block";
+  document.getElementById("appShell").style.display = "flex";
   document.getElementById("reportWrap").style.display = "none";
   document.getElementById("chatBody").innerHTML = "";
   document.getElementById("chatTitle").textContent = "CaseFlow | History Taking Simulation";
@@ -6318,6 +6454,7 @@ function resetSimulationState(preserveStudent = false) {
   appState.lastClassification = null;
   appState.lastComplaint = null;
   appState.disclosed = new Set();
+  appState.consecutiveFallback = 0;
 }
 
 function syncStartScreenIdentity() {
