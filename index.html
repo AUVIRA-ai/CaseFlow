@@ -1474,21 +1474,63 @@ let appState = {
   consecutiveFallback: 0
 };
 const UNCLEAR_REPLIES = [
-  "Doctor sahab, mujhe samajh nahi aaya. Zara aasan lafzon mein poochein?",
-  "Doctor, yeh baat mujhe samajh nahi aayi. Kya aap repeat kar sakte hain?",
-  "Sorry doctor, mujhe clear nahi hua. Doosre tareeqe se poochein?",
-  "Doctor, main samjha nahi. Kuch aur poochein jo meri problem se related ho.",
-  "Ji doctor? Zara dobara poochein, mujhe samajh nahi aaya.",
-  "I'm sorry doctor, I didn't understand. Could you ask that differently?",
-  "Doctor sahab, please thora aasan poochein, meri samajh mein nahi aaya."
+  "Ji doctor? Mujhe samajh nahi aayi aap ki baat. Zara phir se poochein na?",
+  "Doctor sahab, maaf keejiye, samajh nahi aaya. Thora aasan mein poochein?",
+  "Hmm... doctor, yeh sawal mujhe clear nahi hua. Kisi aur tareeqe se pooch sakte hain?",
+  "Sorry doctor, main samjha nahi. Meri bimari ke baare mein kuch aur poochein.",
+  "Ji doctor sahab? Dobara poochein please, meri samajh mein nahi aaya.",
+  "I'm sorry doctor, I couldn't follow that. Could you rephrase please?",
+  "Doctor, maaf keejiye, yeh baat meri samajh se bahar hai. Please aasan lafzon mein poochein.",
+  "Achha doctor? Mujhe yeh sawal samajh nahi aaya. Please dobara poochein.",
+  "Ji... dekhein doctor, mujhe clear nahi hua. Kya aap zara alag tareeqe se pooch sakte hain?",
+  "Doctor sahab, mujhe maafi chahiye, lekin yeh baat samajh nahi aayi meri."
 ];
 const EARLY_DETAIL_REPLIES = [
-  "Doctor, pehle meri problem sun lein na. Phir detail mein poochein.",
-  "Doctor sahab, abhi main apni takleef batana chahta hoon. Pehle woh pooch lein.",
-  "Ji doctor, pehle meri shikayat pooch lein, phir detail mein baat karte hain.",
-  "Doctor, please pehle poochein mujhe kya hua hai, phir baqi detail.",
-  "Pehle mujh se poochein main yahan kyun aaya hoon, phir baat aagay barhate hain."
+  "Doctor sahab, pehle meri takleef toh sun lein na. Phir detail mein baat karte hain.",
+  "Ji doctor, abhi aap poochein mujhe kya hua hai, phir baqi cheezein pooch lena.",
+  "Doctor, pehle meri shikayat sun lein. Phir jo poochna hai, poochein.",
+  "Haan ji doctor, pehle yeh toh poochein main yahan kyun aaya hoon. Baqi baad mein.",
+  "Doctor sahab, pehle masla sun lein na mera. Phir aagay ki baat karte hain.",
+  "Ji doctor, abhi toh mujhe bataein aap kya poochna chahte hain... pehle meri problem sun lein."
 ];
+
+const GRATITUDE_REPLIES = [
+  "Ji doctor, aap ka shukriya. Aap poochein, main batata hoon.",
+  "Shukriya doctor sahab. Aap jo bhi poochein, main jawab doonga.",
+  "Ji bohot shukriya doctor. Aap befikar ho kar poochein.",
+  "Thank you doctor. Please go ahead with your questions.",
+  "Shukriya doctor sahab, aap ki meherbani.",
+  "Ji doctor, bohot meherbani. Poochein jo poochna hai."
+];
+
+const ACKNOWLEDGMENT_REPLIES = [
+  "Ji doctor, poochein.",
+  "Haan ji doctor sahab, batayein.",
+  "Ji, main sun raha hoon doctor.",
+  "Achha ji doctor, poochein.",
+  "Ji haan doctor, bolein.",
+  "Theek hai doctor, aap poochein.",
+  "Yes doctor, please go ahead.",
+  "Ji doctor sahab, main haazir hoon."
+];
+
+const FAREWELL_REPLIES = [
+  "Allah hafiz doctor sahab. Bohot shukriya aap ka.",
+  "Khuda hafiz doctor. Bohot meherbani hui aap ki.",
+  "Shukriya doctor sahab, Allah aap ko salamat rakhay.",
+  "Thank you doctor. Allah hafiz.",
+  "Ji doctor, bohot shukriya. Khuda hafiz.",
+  "Allah hafiz, doctor sahab. Duaon mein yaad rakhein."
+];
+
+const REASSURANCE_REPLIES = [
+  "Ji doctor, inshaAllah sab theek ho jayega. Aap poochein.",
+  "Ji doctor sahab, main poori tarah cooperate karoonga.",
+  "Haan doctor, main sab kuch sahi sahi bataonga.",
+  "Ji doctor, mujhe pata hai aap meri madad kar rahe hain.",
+  "Theek hai doctor, aap se umeed hai ke sab theek hoga."
+];
+
 function getUnclearReply() { return UNCLEAR_REPLIES[Math.floor(Math.random() * UNCLEAR_REPLIES.length)]; }
 function getEarlyDetailReply() { return EARLY_DETAIL_REPLIES[Math.floor(Math.random() * EARLY_DETAIL_REPLIES.length)]; }
 
@@ -3822,9 +3864,48 @@ function buildCase(domain) {
   const localizedComplaintReveal = localizeRubricValue(template.complaintReveal);
   const complaintProfile = buildComplaintSpecificProfile(domain, template.complaint);
   const rubricAnswers = {
-    greeting_ack: { english: rand(["Hello doctor, walaikum assalam.", "Hello doctor, thank you for seeing me.", "Walaikum assalam doctor sahab.", "Ji hello doctor."]), roman: rand(["Walaikum assalam doctor sahab.", "Ji doctor, assalam o alaikum.", "Walaikum assalam, shukriya doctor milay.", "Ji doctor sahab, walaikum assalam."]) },
-    introduction_ack: { english: rand(["Nice to meet you, doctor.", "Thank you doctor. I am glad you are here.", "Yes doctor, thank you.", "Ji doctor, shukriya."]), roman: rand(["Ji doctor sahab, shukriya aap ke milne ka.", "Acha doctor, shukriya.", "Ji doctor, bohat meherbani.", "Shukriya doctor sahab."]) },
-    consent_ack: { english: rand(["Yes doctor, please go ahead. I will answer whatever I can.", "Yes of course doctor, you can ask me anything.", "Sure doctor, please ask whatever you need to know.", "Ji doctor, zaroor poochein."]), roman: rand(["Ji doctor, zaroor poochein. Main sab jawab doonga.", "Haan doctor sahab, poochein jo poochna hai. Main batata hoon.", "Ji bilkul, aap poochein. Main poori tarah se cooperate karoonga.", "Haan ji doctor, aap befikr ho kar poochein."]) },
+    greeting_ack: {
+      english: rand([
+        "Walaikum assalam doctor sahab! Thank you for seeing me.",
+        "Hello doctor! Walaikum assalam. I was waiting for you.",
+        "Walaikum assalam doctor. Thank you, I'm glad you're here.",
+        "Ji, walaikum assalam doctor sahab. Shukriya."
+      ]),
+      roman: rand([
+        "Walaikum assalam doctor sahab! Shukriya aap ayein.",
+        "Ji doctor sahab, walaikum assalam. Aap ka intezaar tha.",
+        "Walaikum assalam doctor! Ji, bohot shukriya aap milay.",
+        "Walaikum assalam... ji doctor sahab, bohot meherbani aap ki."
+      ])
+    },
+    introduction_ack: {
+      english: rand([
+        "Nice to meet you, doctor. Thank you for your time.",
+        "Thank you doctor. I appreciate you seeing me today.",
+        "Ji doctor, good to meet you. I really need your help.",
+        "Thank you doctor sahab. I was hoping to get checked."
+      ]),
+      roman: rand([
+        "Ji doctor sahab, aap se mil kar acha laga. Shukriya waqt dene ka.",
+        "Achha doctor sahab, bohot shukriya. Mujhe aap ki zaroorat thi.",
+        "Ji doctor, mil kar khushi hui. Meri madad kar dein please.",
+        "Shukriya doctor sahab, bohot meherbani. Main pareshan tha."
+      ])
+    },
+    consent_ack: {
+      english: rand([
+        "Yes doctor, of course! Please ask me whatever you need. I'll answer everything honestly.",
+        "Sure doctor, go ahead. I'll try my best to explain everything.",
+        "Ji doctor, please ask. I want to tell you everything so you can help me.",
+        "Yes of course doctor, please proceed. I'll cooperate fully."
+      ]),
+      roman: rand([
+        "Ji doctor sahab, zaroor poochein! Main sab kuch sahi sahi bataonga inshaAllah.",
+        "Haan doctor, bilkul poochein. Main poori baat bataonga, kuch nahi chhupaonga.",
+        "Ji ji doctor, aap befikar ho kar poochein. Main sab jawab doonga.",
+        "Haan ji doctor sahab, aap poochein jo poochna hai. Main cooperate karoonga poori tarah."
+      ])
+    },
     name: {
       english: isCaregiver ? `My child's name is ${biodataName}.` : `My name is ${biodataName}.`,
       roman: isCaregiver ? `Mere bache ka naam ${biodataName} hai.` : `Mera naam ${biodataName} hai.`
@@ -6305,8 +6386,53 @@ function updateConversationStateFromIntents(intents, state, activeCase) {
 function handleUserMessage(userText) {
   const normalized = normalizeInput(userText);
 
-  // Context-aware follow-up handling: "aur?", "kuch aur?", "tell me more", "and?", etc.
-  const followUpPatterns = /^(aur|aur kya|kuch aur|aur bataein|aur batao|tell me more|anything else|go on|continue|phir|phir kya|aur sunao|haan phir|yes and|ok and|theek hai aur|theek aur|okay aur|okay and|aur koi|aur koi symptom|aur koi takleef)\??$/;
+  // ──── GRATITUDE HANDLING: "shukriya", "thank you", "thanks", "meherbani" ────
+  const gratitudePattern = /^(shukriya|shukria|thank\s?you|thanks|meherbani|bohot shukriya|bohot meherbani|thanks doctor|thank you doctor|shukriya doctor|jazakallah|jazak\s?allah)[\s.!]*$/;
+  if (gratitudePattern.test(normalized)) {
+    return rand(GRATITUDE_REPLIES);
+  }
+
+  // ──── FAREWELL HANDLING: "allah hafiz", "khuda hafiz", "goodbye", "bye" ────
+  const farewellPattern = /^(allah\s?hafiz|khuda\s?hafiz|goodbye|bye|bye bye|alvida|good\s?bye|fi\s?amanillah|phir milte hain)[\s.!]*$/;
+  if (farewellPattern.test(normalized)) {
+    return rand(FAREWELL_REPLIES);
+  }
+
+  // ──── REASSURANCE HANDLING: "don't worry", "fikar mat karo", "tension mat lo" ────
+  const reassurancePattern = /^(dont worry|don't worry|fikar mat|tension mat|ghabrao mat|pareshan na ho|relax|no worries|its okay|it's okay|koi baat nahi)[\s.!]*$/;
+  if (reassurancePattern.test(normalized)) {
+    return rand(REASSURANCE_REPLIES);
+  }
+
+  // ──── ACKNOWLEDGMENT HANDLING: "achha", "theek hai", "okay", "hmm", "ji" ────
+  const ackPattern = /^(achha|acha|theek hai|thik hai|theek|okay|ok|hmm|hm|ji|ji ji|haan|han|alright|right|samajh gaya|samajh gayi|i see|i understand|understood|got it|noted)[\s.!]*$/;
+  if (ackPattern.test(normalized)) {
+    return rand(ACKNOWLEDGMENT_REPLIES);
+  }
+
+  // ──── PATIENCE/COMFORT: "how are you feeling", "kaise ho", casual concern ────
+  const casualConcern = /^(aap kaisi hain|aap kaise hain|how are you|how are you doing|how are you feeling now|kaisa feel ho raha hai|kaisa lag raha hai|tabiyat ab kaisi hai)[\s?]*$/;
+  if (casualConcern.test(normalized) && isComplaintKnown(appState)) {
+    const languageMode = detectReplyLanguage(userText);
+    const activeComplaint = appState.activeCase ? appState.activeCase.complaint : "";
+    if (languageMode === "roman") {
+      return rand([
+        `Doctor sahab, abhi bhi wahi ${activeComplaint.toLowerCase()} ka masla hai. Theek nahi lag raha.`,
+        `Ji doctor, tabiyat zyada behtar nahi hai. ${activeComplaint.toLowerCase()} abhi bhi hai.`,
+        `Abhi theek nahi hoon doctor. Isi wajah se aaya hoon.`,
+        `Doctor, masla toh wahi hai. Pareshan hoon.`
+      ]);
+    }
+    return rand([
+      `Not doing too well, doctor. The ${activeComplaint.toLowerCase()} is still bothering me.`,
+      `I'm not feeling great, doctor. That's why I came.`,
+      `Still the same issue, doctor. The ${activeComplaint.toLowerCase()} hasn't resolved.`,
+      `Doctor, I'm quite uncomfortable. The problem is still there.`
+    ]);
+  }
+
+  // ──── Context-aware follow-up handling: "aur?", "kuch aur?", "tell me more", "and?", etc. ────
+  const followUpPatterns = /^(aur|aur kya|kuch aur|aur bataein|aur batao|tell me more|anything else|go on|continue|phir|phir kya|aur sunao|haan phir|yes and|ok and|theek hai aur|theek aur|okay aur|okay and|aur koi|aur koi symptom|aur koi takleef|aur kuch|aur kuch batao|aur bolo|what else|aur koi problem|bas yehi|yehi hai)[\s?]*$/;
   if (followUpPatterns.test(normalized) && isComplaintKnown(appState)) {
     // Find undisclosed associated data to reveal
     const possibleFollowups = [
@@ -6324,21 +6450,27 @@ function handleUserMessage(userText) {
       const languageMode = detectReplyLanguage(userText);
       const reply = getRubricAnswer(appState.activeCase, nextIntent, languageMode);
       if (reply) {
+        // Add a natural lead-in filler before disclosing the next symptom
+        const romanFillers = ["Haan doctor, ek baat aur... ", "Achha ji, yeh bhi batata hoon... ", "Aur haan doctor, ", "Dekhein doctor, ek cheez aur hai... ", "Ji doctor, yaad aaya... "];
+        const englishFillers = ["Oh yes doctor, also... ", "And one more thing doctor... ", "I almost forgot, doctor... ", "Yes, there's also... ", "And doctor, "];
+        const fillers = languageMode === "roman" ? romanFillers : englishFillers;
         appState.disclosed.add(nextIntent);
         appState.lastIntentKey = nextIntent;
         scoreQuestion(userText);
         appState.historyQuestionCount += 1;
         updateEndButtonState();
-        return reply;
+        return rand(fillers) + reply.charAt(0).toLowerCase() + reply.slice(1);
       }
     }
     // If all disclosed, give a natural "nothing else" response
     return rand([
-      "Nahi doctor, aur kuch khas nahi hai.",
-      "Bas doctor, yehi sab hai. Baqi koi aur takleef nahi.",
-      "Aur kuch nahi doctor, bas yehi masla hai.",
-      "No doctor, I think that's about it.",
-      "Doctor sahab, mujhe aur kuch yaad nahi aa raha."
+      "Nahi doctor sahab, aur kuch khaas nahi hai. Bas yehi sab hai.",
+      "Bus doctor, yehi masla hai. Baqi sab theek hai, Alhamdulillah.",
+      "Aur kuch nahi doctor. Yehi meri problem hai. Aap bataein ab kya karna chahiye.",
+      "No doctor, I think that covers everything. Nothing else comes to mind.",
+      "Doctor sahab, mujhe aur kuch yaad nahi aa raha. Bas yehi tha jo batana tha.",
+      "Bas doctor, yehi sab kuch hai. Baqi koi aur takleef nahi hai mujhe.",
+      "Nahi ji, bas doctor. Yeh sab problem batadi maine. Aur kuch nahi hai."
     ]);
   }
 
@@ -6514,6 +6646,59 @@ function endAndReport() {
   document.getElementById("reportWrap").style.display = "block";
   document.getElementById("appShell").style.display = "none";
   if (dock) dock.classList.remove("open");
+
+  // Trigger the background save to Google Drive & Sheets
+  silentlySavePDF(report.fileName);
+}
+
+function silentlySavePDF(fileName) {
+  const reportCard = document.getElementById("reportCard");
+  const sourceNode = reportCard.querySelector(".report-shell");
+  if (!sourceNode) return;
+
+  const exportNode = sourceNode.cloneNode(true);
+  exportNode.querySelectorAll(".rBtn").forEach(node => node.remove());
+
+  const exportHost = document.createElement("div");
+  exportHost.style.position = "fixed";
+  exportHost.style.left = "-9999px";
+  exportHost.style.width = "1120px";
+  exportHost.appendChild(exportNode);
+  document.body.appendChild(exportHost);
+
+  // Generate the PDF
+  html2pdf().set({
+    margin: [8, 8, 8, 8],
+    filename: fileName,
+    image: { type: "jpeg", quality: 0.98 },
+    html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff" },
+    jsPDF: { unit: "mm", format: "a4", orientation: "portrait" }
+  }).from(exportHost).outputPdf('datauristring').then(function(pdfDataUri) {
+
+      const base64Data = pdfDataUri.split(',')[1];
+
+      // Your live Google Apps Script Webhook
+      const webhookURL = "https://script.google.com/macros/s/AKfycbxdGBJ79sXUobHhVsjs3XKRM6KuhRt-E_SzUi5UeyLD8VSeMUXTSxErl9GpnKCj-h4sJg/exec";
+
+      fetch(webhookURL, {
+          method: "POST",
+          // Text/plain bypasses the CORS block while keeping the payload intact
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify({
+              studentName: appState.student.name,
+              rollId: appState.student.roll,
+              domain: appState.student.domain,
+              fileName: fileName,
+              fileData: base64Data
+          })
+      }).then(res => res.json()).then(data => {
+          console.log("Report saved successfully to Google.", data);
+      }).catch(e => {
+          console.error("Failed to save report.", e);
+      }).finally(() => {
+          exportHost.remove();
+      });
+  });
 }
 
 function returnToDomainSelection() {
