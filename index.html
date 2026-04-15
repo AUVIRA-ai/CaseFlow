@@ -6647,70 +6647,33 @@ function endAndReport() {
   document.getElementById("appShell").style.display = "none";
   if (dock) dock.classList.remove("open");
 
-  // Trigger the background save to Google Drive & Sheets
-  silentlySavePDF(report.fileName);
+  // Call our new, lightweight data saver
+  silentlySaveData(report.body);
 }
 
-function silentlySavePDF(fileName) {
-  const reportCard = document.getElementById("reportCard");
-  const sourceNode = reportCard.querySelector(".report-shell");
-  if (!sourceNode) return;
+function silentlySaveData(reportHtml) {
+  // Create a temporary invisible box to strip out the HTML code and get clean, readable text
+  const tempDiv = document.createElement("div");
+  tempDiv.innerHTML = reportHtml;
+  const cleanText = tempDiv.innerText || tempDiv.textContent;
 
-  const exportHost = document.createElement("div");
-  // FIX: Position it inside the viewport to force rendering, but hide it behind the app
-  exportHost.style.position = "fixed";
-  exportHost.style.top = "0";
-  exportHost.style.left = "0";
-  exportHost.style.width = "1120px";
-  exportHost.style.zIndex = "-9999";
-  exportHost.style.background = "#ffffff";
-  exportHost.style.padding = "24px";
+  // The NEW live Google Apps Script Webhook
+  const webhookURL = "https://script.google.com/macros/s/AKfycbxUxl-1zhiDHsuZ5UpDaG2VivweqeGxrbu-TjAtlNySkvrgWKivVg2fa1sfduChqlUr4A/exec";
 
-  const exportStyle = document.createElement("style");
-  exportStyle.textContent = `${reportStyles()} .rBtn{display:none !important;} body{background:#ffffff !important;padding:0 !important;} .report-shell{max-width:1120px !important; margin:0 !important;}`;
-
-  const exportNode = sourceNode.cloneNode(true);
-  exportNode.querySelectorAll(".rBtn").forEach(node => node.remove());
-
-  exportHost.appendChild(exportStyle);
-  exportHost.appendChild(exportNode);
-  document.body.appendChild(exportHost);
-
-  // Wait 300ms for the browser to fully paint the DOM and styles before capturing
-  setTimeout(() => {
-    html2pdf().set({
-      margin: [8, 8, 8, 8],
-      filename: fileName,
-      image: { type: "jpeg", quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff" },
-      jsPDF: { unit: "mm", format: "a4", orientation: "portrait" }
-    }).from(exportHost).outputPdf('datauristring').then(function(pdfDataUri) {
-        
-        // Extract the raw Base64 string
-        const base64Data = pdfDataUri.split(',')[1];
-        
-        // Your live Google Apps Script Webhook
-        const webhookURL = "https://script.google.com/macros/s/AKfycbxdGBJ79sXUobHhVsjs3XKRM6KuhRt-E_SzUi5UeyLD8VSeMUXTSxErl9GpnKCj-h4sJg/exec";
-
-        fetch(webhookURL, {
-            method: "POST",
-            headers: { "Content-Type": "text/plain;charset=utf-8" },
-            body: JSON.stringify({
-                studentName: appState.student.name,
-                rollId: appState.student.roll,
-                domain: appState.student.domain,
-                fileName: fileName,
-                fileData: base64Data
-            })
-        }).then(res => res.json()).then(data => {
-            console.log("Report saved successfully to Google.", data);
-        }).catch(e => {
-            console.error("Failed to save report.", e);
-        }).finally(() => {
-            exportHost.remove(); // Clean up the hidden div
-        });
-    });
-  }, 300);
+  fetch(webhookURL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+          studentName: appState.student.name,
+          rollId: appState.student.roll,
+          domain: appState.student.domain,
+          reportText: cleanText
+      })
+  }).then(res => res.json()).then(data => {
+      console.log("Score saved successfully to Google Sheet.");
+  }).catch(e => {
+      console.error("Failed to save score.", e);
+  });
 }
 
 function returnToDomainSelection() {
