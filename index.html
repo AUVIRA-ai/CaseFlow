@@ -6656,48 +6656,60 @@ function silentlySavePDF(fileName) {
   const sourceNode = reportCard.querySelector(".report-shell");
   if (!sourceNode) return;
 
+  const exportHost = document.createElement("div");
+  // CRITICAL FIX: Use absolute positioning far off-screen instead of opacity: 0
+  // The PDF generator cannot take a picture of an invisible element!
+  exportHost.style.position = "absolute";
+  exportHost.style.top = "-9999px";
+  exportHost.style.left = "-9999px";
+  exportHost.style.width = "1120px";
+  exportHost.style.background = "#ffffff";
+  exportHost.style.padding = "24px";
+
+  const exportStyle = document.createElement("style");
+  exportStyle.textContent = `${reportStyles()} .rBtn{display:none !important;} body{background:#ffffff !important;padding:0 !important;} .report-shell{max-width:1120px !important; margin:0 !important;}`;
+
   const exportNode = sourceNode.cloneNode(true);
   exportNode.querySelectorAll(".rBtn").forEach(node => node.remove());
 
-  const exportHost = document.createElement("div");
-  exportHost.style.position = "fixed";
-  exportHost.style.left = "-9999px";
-  exportHost.style.width = "1120px";
+  exportHost.appendChild(exportStyle);
   exportHost.appendChild(exportNode);
   document.body.appendChild(exportHost);
 
-  // Generate the PDF
-  html2pdf().set({
-    margin: [8, 8, 8, 8],
-    filename: fileName,
-    image: { type: "jpeg", quality: 0.98 },
-    html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff" },
-    jsPDF: { unit: "mm", format: "a4", orientation: "portrait" }
-  }).from(exportHost).outputPdf('datauristring').then(function(pdfDataUri) {
+  // Wait 2 frames for the browser to paint the fully opaque DOM before capturing
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      html2pdf().set({
+        margin: [8, 8, 8, 8],
+        filename: fileName,
+        image: { type: "jpeg", quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff" },
+        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" }
+      }).from(exportHost).outputPdf('datauristring').then(function(pdfDataUri) {
 
-      const base64Data = pdfDataUri.split(',')[1];
+          const base64Data = pdfDataUri.split(',')[1];
 
-      // Your live Google Apps Script Webhook
-      const webhookURL = "https://script.google.com/macros/s/AKfycbxdGBJ79sXUobHhVsjs3XKRM6KuhRt-E_SzUi5UeyLD8VSeMUXTSxErl9GpnKCj-h4sJg/exec";
+          const webhookURL = "https://script.google.com/macros/s/AKfycbxdGBJ79sXUobHhVsjs3XKRM6KuhRt-E_SzUi5UeyLD8VSeMUXTSxErl9GpnKCj-h4sJg/exec";
 
-      fetch(webhookURL, {
-          method: "POST",
-          // Text/plain bypasses the CORS block while keeping the payload intact
-          headers: { "Content-Type": "text/plain;charset=utf-8" },
-          body: JSON.stringify({
-              studentName: appState.student.name,
-              rollId: appState.student.roll,
-              domain: appState.student.domain,
-              fileName: fileName,
-              fileData: base64Data
-          })
-      }).then(res => res.json()).then(data => {
-          console.log("Report saved successfully to Google.", data);
-      }).catch(e => {
-          console.error("Failed to save report.", e);
-      }).finally(() => {
-          exportHost.remove();
+          fetch(webhookURL, {
+              method: "POST",
+              headers: { "Content-Type": "text/plain;charset=utf-8" },
+              body: JSON.stringify({
+                  studentName: appState.student.name,
+                  rollId: appState.student.roll,
+                  domain: appState.student.domain,
+                  fileName: fileName,
+                  fileData: base64Data
+              })
+          }).then(res => res.json()).then(data => {
+              console.log("Report saved successfully to Google.", data);
+          }).catch(e => {
+              console.error("Failed to save report.", e);
+          }).finally(() => {
+              exportHost.remove(); // Clean up hidden div
+          });
       });
+    });
   });
 }
 
