@@ -1460,7 +1460,6 @@ let appState = {
   partialAsked: new Set(),
   rubric: [],
   missedCritical: new Set(),
-  consecutiveFallback: 0,
   greeted: false,
   introduced: false,
   purposeAcknowledged: false,
@@ -1471,28 +1470,20 @@ let appState = {
   lastClassification: null,
   lastComplaint: null,
   disclosed: new Set(),
+  consentStatus: false,
+  conversationStage: "BIODATA",
+  socratesCount: 0,
+  socratesCovered: new Set(),
   consecutiveFallback: 0
 };
-const UNCLEAR_REPLIES = [
-  "Ji doctor? Mujhe samajh nahi aayi aap ki baat. Zara phir se poochein na?",
-  "Doctor sahab, maaf keejiye, samajh nahi aaya. Thora aasan mein poochein?",
-  "Hmm... doctor, yeh sawal mujhe clear nahi hua. Kisi aur tareeqe se pooch sakte hain?",
-  "Sorry doctor, main samjha nahi. Meri bimari ke baare mein kuch aur poochein.",
-  "Ji doctor sahab? Dobara poochein please, meri samajh mein nahi aaya.",
-  "I'm sorry doctor, I couldn't follow that. Could you rephrase please?",
-  "Doctor, maaf keejiye, yeh baat meri samajh se bahar hai. Please aasan lafzon mein poochein.",
-  "Achha doctor? Mujhe yeh sawal samajh nahi aaya. Please dobara poochein.",
-  "Ji... dekhein doctor, mujhe clear nahi hua. Kya aap zara alag tareeqe se pooch sakte hain?",
-  "Doctor sahab, mujhe maafi chahiye, lekin yeh baat samajh nahi aayi meri."
-];
-const EARLY_DETAIL_REPLIES = [
-  "Doctor sahab, pehle meri takleef toh sun lein na. Phir detail mein baat karte hain.",
-  "Ji doctor, abhi aap poochein mujhe kya hua hai, phir baqi cheezein pooch lena.",
-  "Doctor, pehle meri shikayat sun lein. Phir jo poochna hai, poochein.",
-  "Haan ji doctor, pehle yeh toh poochein main yahan kyun aaya hoon. Baqi baad mein.",
-  "Doctor sahab, pehle masla sun lein na mera. Phir aagay ki baat karte hain.",
-  "Ji doctor, abhi toh mujhe bataein aap kya poochna chahte hain... pehle meri problem sun lein."
-];
+const UNCLEAR_REPLIES = {
+  en: ["I don't know about that, doctor.", "I'm not sure what you mean."],
+  roman: ["Mujhe iska nahi pata doctor sahab.", "Samajh nahi aaya doctor sahab."]
+};
+const DEFAULT_UNKNOWN_REPLY = "Mujhe iska nahi pata doctor sahab.";
+const EARLY_DETAIL_REPLY = "Doctor, pehle meri current problem pooch lein.";
+const EARLY_CONSENT_REMINDER = "Doctor sahab, pehle ijazat toh lein sawal karne ki.";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyz8EJjbBATX65-QxOXRFn_d0DGa91MBaJMMm38fX1wtH6X-9uFzFqJ7Cbb27TrC7OToQ/exec";
 
 const GRATITUDE_REPLIES = [
   "Ji doctor, aap ka shukriya. Aap poochein, main batata hoon.",
@@ -1531,8 +1522,30 @@ const REASSURANCE_REPLIES = [
   "Theek hai doctor, aap se umeed hai ke sab theek hoga."
 ];
 
-function getUnclearReply() { return UNCLEAR_REPLIES[Math.floor(Math.random() * UNCLEAR_REPLIES.length)]; }
-function getEarlyDetailReply() { return EARLY_DETAIL_REPLIES[Math.floor(Math.random() * EARLY_DETAIL_REPLIES.length)]; }
+function getUnclearReply(languageMode = "roman") {
+  const key = languageMode === "english" || languageMode === "en" ? "en" : "roman";
+  const list = UNCLEAR_REPLIES[key] || UNCLEAR_REPLIES.roman;
+  return (key === "roman" ? DEFAULT_UNKNOWN_REPLY : list[0]);
+}
+
+function isUnclearReply(reply) {
+  const allUnclear = [...(UNCLEAR_REPLIES.en || []), ...(UNCLEAR_REPLIES.roman || [])];
+  return allUnclear.includes(reply);
+}
+function getEarlyDetailReply() { return EARLY_DETAIL_REPLY; }
+
+function logUnknownInput(text) {
+  fetch(SCRIPT_URL, {
+    method: "POST",
+    mode: "no-cors",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({
+      type: "LEARNING_DATA",
+      unknownPhrase: text,
+      caseContext: appState.activeCase ? appState.activeCase.complaint : "Unknown Case"
+    })
+  }).catch(() => {});
+}
 
 function rand(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 function nowISO() { return new Date().toLocaleString(); }
@@ -1668,6 +1681,7 @@ function normalizeInput(text) {
     [/\bsugeries\b/g, "surgery"],
     [/\bsugury\b/g, "surgery"],
     [/\bdard\b/g, "pain"],
+    [/\bdrad\b/g, "pain"],
     [/\bbukhar\b/g, "fever"],
     [/\bsaans\b/g, "breathlessness"],
     [/\bumar\b/g, "age"],
@@ -1687,7 +1701,12 @@ function normalizeInput(text) {
     [/\bbazu\b/g, "arm"],
     [/\btaang\b/g, "leg"],
     [/\bmotion\b/g, "stool"],
+    [/\bdil kharab\b/g, "nausea"],
+    [/\bmann kharab\b/g, "nausea"],
+    [/\bman kharab\b/g, "nausea"],
+    [/\bulti jaisa\b/g, "nausea"],
     [/\bmatli\b/g, "nausea"],
+    [/\bmalti\b/g, "nausea"],
     [/\bdoodh\b/g, "feed"],
     [/\bbp\b/g, "blood pressure"],
     [/\bsugar\b/g, "diabetes"],
@@ -1707,6 +1726,751 @@ function normalizeInput(text) {
   });
 
   return normalized.replace(/\s+/g, " ").trim();
+}
+
+const CLINICAL_INTENT_MAP = {
+  "protocol": {
+    "greeting": [
+      "hello", "hi", "assalam", "salam", "aoa", "good morning", "hey", "aadab", "asalam o alaikum", "assalamu alaikum", "namaste", "greetings", "hi doctor", "hello doctor", "salaam doctor", "aoa dr", "hi there", "salam dr sahab", "good afternoon", "good evening", "adaab arz hai", "ji salam", "salam un alaikum", "hey there", "doctor assalam", "morning doctor", "hello patient", "hi patient", "hey patient", "aslam", "wa alaikum", "waalaikum", "salamz", "aslamo", "aslamu", "asslam", "salam alaikm", "salaam dr", "howdy", "hiya", "welcome", "glad to see you", "hey dr", "doctor hi", "doctor hello", "patient hi", "patient hello", "how are you", "how are you doing", "kaise hain", "kya haal hai", "tabiyat kaisa hai"
+    ],
+    "introduction": [
+      "i am dr", "my name is", "student doctor", "attending", "main doctor hoon", "mein dr", "myself dr", "i am your doctor", "this is dr", "i am looking after you", "i will be your dr", "i am dr ahmed", "i am dr ayesha", "dr bol raha hoon", "doctor baat kar raha hoon", "student doctor hoon", "medical student hoon", "junior doctor hoon", "i am the medical student", "i am a medical student", "i am dr in charge", "i am your physician", "my name is doctor", "call me dr", "aapka doctor hoon", "mein aapka dr hoon", "main apka dr", "iam dr", "myname is", "i am from the team", "part of medical team", "treating dr", "on duty doctor", "duty dr", "ward dr", "house officer hoon", "ho hoon", "medical officer", "mo hoon", "i am your medical team member", "representing the team", "i am here to treat you", "i am here to see you", "i am checking you", "performing examination", "examining doctor", "i am dr and i will help you", "i am here for you", "i am the student in charge", "call me dr sahab"
+    ],
+    "consent": [
+      "permission", "consent", "history", "ask you", "questions", "ijazat", "may i", "can i", "shuru karein", "may i take your history", "can i ask some questions", "is it okay if i ask", "do you mind if i ask", "shall we start", "history le sakta hoon", "sawal kar sakta hoon", "ijazat hai", "aap ki ijazat chahiye", "shuru karoon", "shuru karen", "can we proceed", "may i proceed", "is it alright", "are you ready", "can i start taking notes", "may i know about your problem", "permission to ask", "aap permit karte hain", "ready for the interview", "can i interview you", "may i talk to you", "kya main baath kar sakta hoon", "baat karoon", "permission check", "taking permission", "start questions", "begin history", "start clinical history", "can we begin", "would you like to start", "is it fine", "am i allowed to ask", "may i investigate", "taking your details", "checking your symptoms", "kya main poochoon", "kya main poochon", "puchein", "can i talk about your health", "let's talk about your pain", "discuss your condition"
+    ]
+  },
+  "socrates": {
+    "site": [
+      "where", "location", "kahan", "jaga", "site", "kidhar", "kis taraf", "exact place", "point to it", "show me where", "which part", "anatomical site", "mark the area", "is it in the middle", "right side", "left side", "upper", "lower", "inner", "outer", "pait mein kahan", "seene mein kahan", "gardan mein kahan", "zakhm kahan hai", "ganth kahan hai", "show me with your finger", "point to the pain", "where exactly is it", "is it generalized", "is it localized", "kis hissay mein hai", "kahan par dard hai", "location of swelling", "site of lump", "where do you feel it most", "position of pain", "is it deep", "is it superficial", "which side of the body", "front", "back", "middle", "central", "lateral", "medial", "superior", "inferior", "dariye kahan", "kis jagah takleef hai", "dard ki jagah", "pointing at pain", "exact site please", "kahan se shuru hota hai", "mark it", "draw a circle around it"
+    ],
+    "onset": [
+      "when", "start", "kab", "shuru", "how did it begin", "starting", "onset", "sudden", "gradual", "acute", "chronic", "first time", "initial", "kab shuru hua", "kaise shuru hua", "achanak hua", "dheere dheere hua", "when was the first time", "since when did it start", "at what time", "day or night start", "pehli dafa kab hua", "how did it first appear", "mode of onset", "first symptom appeared", "starting point", "kab hua tha", "shuruat kab hui", "shuru kab se", "how long ago did it start", "was it sudden or slow", "did it come on slowly", "did it hit you suddenly", "when did you first notice it", "starting date", "starting hour", "was it related to anything", "triggering onset", "kab se shuruat hui", "shuruati waqt", "pehle kab mehsoos kiya", "notice kab kiya", "start time", "onset duration", "how did the onset feel", "was it instant", "insidious", "shuru kaise hui takleef", "shuruati din", "kab shuru hui problem", "shuruat ka bataein"
+    ],
+    "character": [
+      "what kind", "kaisa", "character", "sharp", "dull", "burning", "nature", "chubhan", "jalan", "bojh", "heavy", "stabbing", "throbbing", "aching", "crushing", "colicky", "crampy", "tearing", "pricking", "tightness", "heaviness", "pressure", "kaisa dard hai", "dard ki qism", "kis tarah ka hai", "chubhne wala", "jalne wala", "dabaon wala", "pounding", "pulsating", "radiating character", "constant or intermittent character", "describe the feeling", "how does it feel like", "is it a pin prick", "is it a hammer blow", "is it like a weight", "is it like an acid burn", "dard kaisa mehsoos hota hai", "nature of swelling", "consistency of lump", "kaisa lagta hai", "dard ki quality", "quality of pain", "how would you describe the pain", "describe the character", "is it mild or sharp", "is it sharp like a knife", "is it a heavy bojh", "kis qism ki takleef hai", "dard kaisa ha", "how is the pain", "is it steady", "is it a wave", "cramp jaisa", "heavy pressure", "sharp stabbing"
+    ],
+    "radiation": [
+      "move", "spread", "radiate", "phailta", "kahin aur", "spreads", "travels", "bazu tak", "back tak", "moves anywhere else", "goes to the back", "goes to the arm", "goes to the jaw", "goes to the shoulder", "radiation of pain", "kahin aur bhi jata hai", "kis taraf phailta hai", "any where else it goes", "shifting pain", "referred pain", "does it travel down the leg", "does it go up the neck", "bazu mein dard jata hai", "kamar mein jata hai", "kandhe tak jata hai", "neck tak jata hai", "spreads to the groin", "moves around", "localized or radiating", "stay in one place", "stay fixed", "fix rehta hai ya chalta hai", "spreads to other parts", "movement of pain", "phailne wala dard", "chalta phirta dard", "does it migrate", "migrating pain", "any other part involved", "kahin aur takleef hoti hai", "spread to limbs", "spread to head", "spread to ears", "do you feel it elsewhere", "radiates to", "travels to", "shifting to", "goes to", "kahin aur move karta ha", "kandhon mein jata ha", "shoulder radiation", "back radiation", "jaw radiation"
+    ],
+    "severity": [
+      "severity", "how bad", "kitna", "scale", "1 to 10", "shadeed", "intensity", "bad is it", "pain score", "rate your pain", "how severe is the pain", "bohat zyada hai", "halka hai", "madhyam hai", "out of ten", "zero to ten", "1 se 10", "kitna dard hai", "shiddat kitni hai", "shiddat ka bataein", "grade of fever", "high fever", "how much temperature", "kitna bukhar tha", "degree of pain", "shiddat kaisa hai", "is it bearable", "tolerable", "severe enough to cry", "severe enough to stop work", "daily activity affected", "kitna zyada takleef", "shadeed dard", "mild moderate or severe", "pain scale ranking", "how painful is it", "pain intensity", "score it", "rank it", "kitna shadeed bukhar", "kitni shadeed soojan", "size severity", "scale of 10", "on a scale of 0 to 10", "give it a number", "number the pain", "grade your symptom", "how intense is it", "level of pain", "pain level", "current severity", "maximum severity", "worst pain ever", "bohat shadeed ha", "halka ha"
+    ]
+  },
+  "systems_medicine": {
+    "fever": [
+      "fever", "bukhar", "temperature", "chills", "rigors", "kapkapi", "garam", "body hot", "thermometer", "reading", "max temperature", "evening rise", "continuous fever", "remittent", "intermittent", "step ladder", "bukhar kab ata hai", "bukhar kaisa hai", "tharthari", "thand lagna", "pattiyan ki thin", "paracetamol li", "fever symptoms", "sweating after fever", "bukhar ke sath aur kya hai", "kitne din se bukhar", "how high is the temperature", "did you check it", "recorded temperature", "documented fever", "evening rise of temperature", "night sweats", "weight loss with fever", "rash with fever", "neck stiffness with fever", "bukhar aur dard", "jism garam", "fever pattern", "malaria check", "typhoid check", "dengue signs", "rigors and chills", "kapkapi ke sath bukhar", "thand ke sath bukhar", "bukhar charhta hai", "bukhar utarta hai", "does it come in waves", "fever spikes", "highest reading", "bukhar kitna tha", "temp check kiya tha", "measured with thermometer", "feverish feeling", "body aches with fever", "myalgia with fever", "headache with fever"
+    ],
+    "chest_pain": [
+      "chest", "seena", "angina", "heavy", "sweating", "paseena", "palpitations", "dharkan", "shortness of breath", "saans phoolna", "chest heaviness", "crushing chest pain", "pressure in chest", "tightness in chest", "seene mein bojh", "seene mein jalan", "seene mein dabaon", "seene mein dard", "heart racing", "heart thumping", "dharkan tez", "paseenay ana", "ghabrahat", "chest discomfort", "cardiac pain", "myocardial infarction", "anginal pain", "pleuritic chest pain", "tearing chest pain", "chest tightness", "seena phatna", "heaviness on chest", "elephant on chest", "seene par bojh", "chest pressure", "chest crushing", "breathless with chest pain", "nausea with chest pain", "vomiting with chest pain", "sweating profusely", "thanda paseena", "cold sweats", "jaw pain with chest", "arm pain with chest", "back pain with chest", "chest radiation", "dil ki dharkan", "dil tez dhadakna", "palpitating", "fluttering", "heart skip a beat", "dharkan ka masla", "chest ache", "sharp chest pain", "dull chest ache", "chest burning", "acidity or heart", "heart pain", "cardiac symptoms"
+    ],
+    "respiratory": [
+      "breath", "saans", "cough", "khansi", "sputum", "balgham", "wheeze", "seeti", "shortness of breath", "breathing difficulty", "saans ki takleef", "saans phool rahi hai", "difficulty breathing", "wheezing", "asthma", "seeti ki awaz", "khansi kaisa hai", "balgham ka rang", "balgham mein khoon", "khansi mein khoon", "coughing up blood", "hemoptysis", "productive cough", "dry cough", "khushk khansi", "balghami khansi", "smoker's cough", "nocturnal cough", "breathlessness on walking", "saans charhna", "saans rukna", "choking feeling", "chest tightness respiratory", "wheeze sound", "whistling sound", "khansi kab se", "balgham kitna ata hai", "sputum amount", "sputum color", "sputum smell", "badbudar balgham", "yellow sputum", "green sputum", "white sputum", "clear sputum", "coughing episodes", "paroxysmal cough", "whooping cough", "saans ki ghabrahat", "oxygen level", "short of breath", "struggling to breathe", "can't catch breath", "saans ki nali", "phayphray", "lungs", "chest infection", "pneumonia symptoms", "tb symptoms", "cough triggers", "dust allergy", "smoke allergy"
+    ]
+  },
+  "systems_pediatrics": {
+    "peds_core": [
+      "child", "bacha", "bacha", "bachi", "baby", "infant", "newborn", "school child", "teekay", "vaccination", "feeding", "doodh", "milestones", "paidaish", "birth history", "wet diapers", "dehydration", "sunken eyes", "child fever", "child cough", "child diarrhea", "bacha bukhar", "bache ko khansi", "bache ko dast", "khelta hai", "active hai", "sust hai", "chirrchira", "irritable"
+    ]
+  },
+  "systems_surgery": {
+    "surg_core": [
+      "lump", "swelling", "ganth", "ulcer", "zakhm", "size", "shape", "single", "multiple", "mobile", "fixed", "skin changes", "reducible", "cough impulse", "discharge", "pus", "bleed", "bleeding", "lower limb ulcer", "varicose ulcer", "leg ulcer", "neck swelling", "gardan swelling"
+    ]
+  },
+  "systems_gyne": {
+    "gyne_core": [
+      "period", "mahwari", "menses", "lmp", "last period", "cycle", "regular cycle", "irregular cycle", "amenorrhea", "pregnancy", "hamal", "obstetric", "gravida", "para", "vaginal discharge", "safed pani", "abnormal bleeding", "pv bleeding", "clots", "foul smell discharge", "itching", "lower abdominal pain"
+    ]
+  },
+  "background": {
+    "past_hx": [
+      "past history", "pehle", "bimari", "diabetes", "sugar", "blood pressure", "bp", "hypertension", "asthma", "tb", "purani bimari", "pehle koi masla", "pehle se koi illness", "any previous disease", "history of illness", "chronic disease", "long term condition", "hospitalization history", "pehle admit hue", "ever admitted to hospital", "previous surgery", "operation history", "pehle koi operation", "heart disease history", "kidney disease", "liver disease", "jigar ka masla", "gurday ka masla", "dil ka masla", "asthma ka masla", "sugar ka masla", "bp ka masla", "hypertension history", "diabetes history", "tuberculosis", "fits history", "seizures", "strokes", "paralysis", "falij", "hepatitis", "yarqan", "jaundice history", "thyroid problem", "cancer history", "any long term medicine", "chronic illness", "past medical issues", "before this", "previous episodes", "pehle bhi hua tha", "was it diagnosed", "doctor told you before", "purana masla", "sabiqa bimari", "bimariyon ka record", "medical record", "previous reports", "sugar level", "bp level", "purana bukhar", "childhood illness", "bachpan ki bimari"
+    ],
+    "drug_hx": [
+      "medicine", "dawa", "medication", "regular", "tablets", "pills", "dawai", "dosage", "current meds", "taking drugs", "kya dawa le rahe hain", "regular medicine", "daily medicine", "pills you take", "any prescription", "over the counter", "totkay", "hakeemi dawa", "herbal medicine", "homeopathic", "dawa ka naam", "tablet name", "capsule", "syrup", "inhaler", "insulin", "injection", "any steroids", "aspirin", "blood thinners", "bp medicine", "sugar medicine", "dawa kitni dafa", "frequency of medicine", "missed doses", "compliance", "dawa sahi lete hain", "dawa band ki thi", "started new medicine", "any change in medicine", "reactions to medicine", "side effects", "dawaiyan", "goli", "teeka", "insulin lagate hain", "dawa kab se", "how long on medicine", "who prescribed the medicine", "dawa kis liye", "medical treatment", "currently on treatment", "ilah chal raha hai", "treatment history", "dawa ka asar", "medicines list", "show me your medicines", "bring your prescriptions", "dawa ka patta", "konsi goli", "konsi dawa", "dawaiyon ki tafseel"
+    ],
+    "family_hx": [
+      "family", "khandan", "parents", "ghar mein", "genetics", "family history", "disease in family", "khandani bimari", "parents healthy", "father health", "mother health", "siblings", "brothers and sisters", "kisi aur ko masla", "ghar mein kisi aur ko bukhar", "parents history", "sugar in family", "bp in family", "heart disease in family", "cancer in family", "genetic disorder", "inherited disease", "walidain ki sehat", "behan bhaiyon ki sehat", "family tree", "any deaths in family", "cause of death", "how did they die", "age of death", "family illness record", "ghar walon ko masla", "ami abu ko sugar", "ami abu ko bp", "khandan mein kisi ko tb", "asthma in family", "khandani history", "similar symptoms in family", "family health check", "relatives health", "cousin marriage", "intermarriage", "consanguinity", "khandan mein shadi", "born with problems", "family member sick", "anyone else at home sick", "contagious in family", "hereditary", "nasli bimari", "paitri bimari", "generation illness", "family prone to", "running in family", "ghar mein sab theek", "family details"
+    ]
+  }
+};
+
+const CLINICAL_NODE_TO_INTENT = {
+  protocol: {
+    greeting: "greeting",
+    introduction: "introduction",
+    consent: "consent_request"
+  },
+  socrates: {
+    site: "pain_location",
+    onset: "onset",
+    character: "pain_character",
+    radiation: "radiation",
+    severity: "severity"
+  },
+  systems_medicine: {
+    fever: "fever_detail",
+    chest_pain: "associated_symptoms",
+    respiratory: "breathlessness_detail"
+  },
+  systems_pediatrics: {
+    peds_core: null
+  },
+  systems_surgery: {
+    surg_core: null
+  },
+  systems_gyne: {
+    gyne_core: null
+  },
+  background: {
+    past_hx: "past_medical_history",
+    drug_hx: "medications",
+    family_hx: "family_history"
+  }
+};
+
+const SOCRATES_INTENTS = new Set(["pain_location", "onset", "pain_character", "radiation", "severity", "duration", "aggravating", "relieving", "progression"]);
+
+const INTENT_SEED_LIB = {
+  site: [
+    "where", "where exactly", "where is it", "where is pain", "where is swelling", "location",
+    "site", "point to it", "point to pain", "which side", "which place", "exact site",
+    "kahan", "kahan hai", "dard kahan", "soojan kahan", "kis jagah", "kis jaga",
+    "kidhar", "kis taraf", "konsi jaga", "jaga bataein", "jaga btao", "maqam",
+    "position", "spot", "area", "kis hissay mein", "part of body", "site batao"
+  ],
+  onset: [
+    "when", "when start", "when did it start", "when did this begin", "how did it start",
+    "how did it begin", "onset", "starting time", "first noticed when", "sudden or gradual",
+    "since when started", "initially when", "start kab", "start ka time", "start date",
+    "kab", "kab hua", "kab shuru hua", "kab shuru hui", "shuru kab hua", "shuruat kab",
+    "kaise shuru hua", "achanak shuru hua", "dheere dheere shuru hua", "pehli dafa kab",
+    "kab se shuru", "kis waqt hua", "notice kab kiya", "first episode kab", "onset bataein"
+  ],
+  character: [
+    "what kind", "what type", "type of pain", "pain character", "nature of pain",
+    "is it sharp", "is it dull", "is it burning", "is it throbbing", "is it stabbing",
+    "is it cramping", "pressure like", "aching pain", "describe the pain", "pain quality",
+    "kaisa", "dard kaisa", "kis type ka dard", "kis tarah ka", "kis qism ka",
+    "chubhan", "jalan", "bojh", "dabao", "teekha dard", "halka dard", "dukhna",
+    "dukhta hai", "jalta hai", "constant ya intermittent", "quality bataein"
+  ],
+  radiation: [
+    "does it spread", "does it radiate", "does it move", "does it travel",
+    "goes anywhere else", "goes to arm", "goes to jaw", "goes to back", "goes to shoulder",
+    "radiation", "radiation of pain", "referred pain", "migrating pain", "fixed or spreading",
+    "spread hota hai", "phailta hai", "failta hai", "kahin aur jata hai", "kahin aur hota hai",
+    "bazu mein jata hai", "jabre tak jata hai", "peeth mein jata hai", "kandhe tak jata hai",
+    "gardan tak jata hai", "pair tak jata hai", "idhar udhar hota hai", "shift hota hai",
+    "kis taraf phailta hai", "kahan tak jata hai", "radiation bataein"
+  ],
+  severity: [
+    "how bad", "how severe", "severity", "pain score", "rate your pain", "scale", "1 to 10",
+    "0 to 10", "how much pain", "how intense", "maximum severity", "worst pain", "current level",
+    "is it unbearable", "mild moderate severe", "kitna", "kitna dard", "kitna zyada",
+    "shiddat", "shadeed", "shiddat kitni", "1 se 10", "out of ten", "number bataein",
+    "score bataein", "kitni takleef", "kitni pareshani", "bohat zyada hai", "halka hai ya bohat",
+    "severity level", "pain level"
+  ],
+  fever: [
+    "fever", "bukhar", "temperature", "temp", "high temperature", "did you check temperature",
+    "thermometer", "thermometer reading", "max temperature", "highest temp", "fever pattern",
+    "continuous fever", "intermittent fever", "evening rise", "chills", "rigors",
+    "kapkapi", "tharthari", "thand lagti hai", "night sweats", "fever spikes",
+    "bukhar kitna", "bukhar kab se", "bukhar roz ata hai", "reading kya thi", "recorded value",
+    "oral temperature", "axillary temperature", "fever detail", "bukhar detail"
+  ],
+  lump_size: [
+    "lump size", "size of lump", "how big", "how big is it", "dimensions", "dimension",
+    "size of swelling", "diameter", "in cm", "how many cm", "small or large",
+    "progressively increasing size", "size change", "size estimate", "mass size",
+    "ganth ka size", "soojan ka size", "kitna bara", "kitna bara hai", "kitne cm",
+    "kitni lambai", "kitni chaurai", "gola kitna bara", "bump size", "ulcer size",
+    "zakhm ka size", "lesion size", "size badh raha hai", "size same hai", "size details"
+  ],
+  cough: [
+    "cough", "khansi", "dry cough", "wet cough", "productive cough", "sputum",
+    "balgham", "cough since when", "cough frequency", "cough severity", "night cough",
+    "daytime cough", "persistent cough", "intermittent cough", "wheezing cough",
+    "khansi kab se", "khansi kitni dafa", "khansi kitni shadeed", "balgham ka rang",
+    "khansi mein khoon", "hemoptysis", "dust se khansi", "cold se khansi", "khushk khansi",
+    "balghami khansi", "subah ki khansi", "raat ki khansi", "cough detail", "phlegm details", "khansi detail"
+  ],
+  weight_loss: [
+    "weight loss", "lost weight", "losing weight", "recent weight loss", "unintentional weight loss",
+    "how much weight lost", "weight trend", "weight change", "kg lost", "wasting",
+    "thin ho gaye", "wazan kam", "wazan kam ho gaya", "wazan gir gaya", "wazan ghat raha",
+    "kitna wazan kam", "kitne kilo kam", "kapray loose ho gaye", "kamzori ke sath wazan kam",
+    "rapid weight loss", "slow weight loss", "muscle loss", "body mass decreased",
+    "bina koshish ke wazan kam", "wazan monitoring", "weight record", "wazan detail", "weight detail", "drop in weight", "weight decrease"
+  ],
+  appetite: [
+    "appetite", "loss of appetite", "reduced appetite", "poor appetite", "food intake",
+    "diet intake", "oral intake", "unable to eat", "early satiety", "food aversion",
+    "appetite better or worse", "meal frequency", "meal quantity", "nutrition intake",
+    "bhook", "bhook kam", "bhook nahi lagti", "khane ka dil nahi", "khana kam khate",
+    "khane se ghabrahat", "thori bhook", "bhook ka level", "khurak kam", "feed kam hui",
+    "bhook kab se kam", "khane ki quantity", "food interest", "hunger level", "bhook ka masla", "appetite detail"
+  ],
+  vaccination: [
+    "vaccination", "vaccines", "immunization", "immunisation", "vaccination status",
+    "routine vaccines", "epi schedule", "polio drops", "bcg", "pentavalent",
+    "measles vaccine", "mmr", "booster dose", "missed vaccines", "vaccination card",
+    "immunization card", "up to date vaccines", "fully vaccinated", "partially vaccinated",
+    "not vaccinated", "last vaccine kab", "birth vaccines", "teekay", "teeke",
+    "teekay complete hain", "teekon ka record", "teekay miss hue", "teekay detail",
+    "child vaccination history", "vaccine schedule"
+  ],
+  periods: [
+    "periods", "period history", "menstrual history", "menses", "cycle",
+    "cycle regular", "cycle irregular", "last period", "lmp", "aakhri period",
+    "period duration", "bleeding days", "period amount", "pad count", "heavy periods",
+    "light periods", "painful periods", "missed periods", "period delay", "spotting",
+    "intermenstrual bleeding", "clots in periods", "cycle length", "period pattern",
+    "mahwari", "mahwari regular", "mahwari beqaida", "mahwari ka record", "period detail", "menses detail"
+  ],
+  consent: [
+    "consent", "permission", "may i ask", "can i ask", "may i take history", "can i take history",
+    "may i take your history", "can i proceed", "shall we start", "is it okay if i ask",
+    "do i have your permission", "can we begin", "may we begin", "ready to start",
+    "history taking consent", "interview consent", "clinical consent",
+    "ijazat", "ijazat hai", "history le sakta hoon", "history le sakti hoon",
+    "kya main sawal kar sakta hoon", "kya main sawal kar sakti hoon", "kya main shuru karun",
+    "kya hum shuru karein", "poochne ki ijazat", "sawal poochne ki ijazat", "permission for questions", "ijazat dein", "consent dain"
+  ],
+  intro: [
+    "i am dr", "i am doctor", "my name is dr", "myself dr", "this is dr", "i am your doctor",
+    "i am the student doctor", "i am medical student", "i am from medical team",
+    "i am attending", "attending physician", "doctor speaking", "house officer",
+    "intern doctor", "junior doctor speaking", "doctor introduction",
+    "main doctor hoon", "mein dr hoon", "main dr hoon", "doctor bol raha hoon",
+    "doctor bol rahi hoon", "student doctor hoon", "medical student hoon",
+    "main aap ka doctor hoon", "main aap ki doctor hoon", "mein case le raha hoon",
+    "mein case le rahi hoon", "main aap se sawal karunga", "main aap se sawal karungi", "mera naam doctor"
+  ]
+};
+
+function buildIntentVariants(seedList) {
+  const prefixes = ["", "doctor ", "dr ", "ji ", "please ", "zara ", "thora "];
+  const suffixes = ["", " please", " doctor", " dr", " ji", " bataein", " batao", " na", " zara"];
+  const variants = new Set();
+  (seedList || []).forEach(seed => {
+    const base = normalizeInput(seed);
+    if (!base) return;
+    variants.add(base);
+    variants.add(base.replace(/\s+/g, ""));
+    prefixes.forEach(prefix => {
+      suffixes.forEach(suffix => {
+        variants.add(normalizeInput(`${prefix}${base}${suffix}`));
+      });
+    });
+  });
+  return [...variants].filter(Boolean);
+}
+
+const MASTER_INTENT_SEED_LIB = {
+  protocol: [
+    "hello", "hi", "assalam", "salam", "aoa", "good morning", "aadab", "ijazat", "permission",
+    "consent", "history", "ask questions", "may i", "can i", "shuru karein", "i am dr",
+    "my name is", "doctor hoon", "dr hoon", "introduction", "allow me", "can we start",
+    "history loon", "sawal poochun", "pooch sakta hoon", "pooch sakti hoon", "consent please",
+    "ready to start", "kya shuru karein", "kya main sawal karun"
+  ],
+  biodata: [
+    "name", "naam", "age", "umar", "old", "saal", "gender", "sex", "mard", "aurat",
+    "address", "kahan se", "rehte", "occupation", "job", "kaam", "pesha", "married", "shadi",
+    "aap ka naam", "kitni age", "kitni umar", "aap kahan rehte", "kya kaam karte", "shadi shuda",
+    "single ya married", "male ya female", "aap ka pata", "residence", "biodata"
+  ],
+  chief_complaint: [
+    "why here", "brings you", "problem", "masla", "takleef", "shikayat", "hua", "happened",
+    "aaj kyun", "pareshani", "kya hua", "kis liye aaye", "what is bothering", "chief complaint",
+    "main complaint", "presenting complaint", "issue today", "kis wajah se", "why today", "kya pareshani"
+  ],
+  site: INTENT_SEED_LIB.site,
+  onset: INTENT_SEED_LIB.onset,
+  character: INTENT_SEED_LIB.character,
+  radiation: INTENT_SEED_LIB.radiation,
+  severity: INTENT_SEED_LIB.severity,
+  aggravating_relieving: [
+    "worse", "better", "aggravating", "relieving", "triggers", "relief", "kis se barhta",
+    "kis se kam", "rest", "dawa", "worse with", "better with", "kis cheez se barhta",
+    "kis cheez se kam", "what makes worse", "what makes better", "aaram se", "medicine se",
+    "movement se barhta", "lying se kam", "walking se barhta", "sitting se kam", "chalne se barhta",
+    "harkat se barhta", "kaam karne se barhta", "zor lagane se barhta", "letne se kam", "baithne se kam",
+    "dawai se kam", "rest se kam", "aaram se behtar", "sleep se kam", "activity se barhta", "tez ho jata"
+  ],
+  associated_symptoms: [
+    "other symptoms", "aur kya", "associated", "sath mein", "anything else", "besides this",
+    "extra", "aur koi masla", "aur symptom", "kuch aur", "other complaint", "any associated feature",
+    "associated complaints", "plus symptoms", "aur takleef", "koi aur issue", "sath kya hota hai"
+  ],
+  background_hx: [
+    "past history", "purani bimari", "sugar", "diabetes", "bp", "hypertension", "asthma", "tb",
+    "operation", "surgery", "medicine", "dawa", "allergy", "family", "khandan", "smoke", "cigarette",
+    "alcohol", "sharab", "drug history", "past medical", "past surgical", "family history", "social history",
+    "smoking history", "drinking", "koi purana masla", "regular medicine", "koi operation pehle", "allergy history"
+  ],
+  pediatrics_specific: [
+    "birth", "paidaish", "delivery", "feeding", "doodh", "milk", "vaccination", "teekay",
+    "milestones", "growth", "wazan", "bacha", "child", "immunization", "weaning",
+    "birth history", "feeding history", "vaccination history", "development", "weight gain",
+    "weight loss child", "teeke", "teekon ka record", "developmental milestones", "urine output child"
+  ]
+};
+
+const BASE_INTENT_SEEDS = { ...INTENT_SEED_LIB, ...MASTER_INTENT_SEED_LIB };
+
+const INTENT_PERMUTATION_BLUEPRINT = {
+  intro: {
+    nouns: ["doctor", "student doctor", "dr", "medical student", "clinician", "attending"],
+    verbs: ["i am", "my name is", "main hoon", "mein hoon", "call me", "this is"],
+    slang: ["main doctor hoon", "mein dr hoon", "doctor here", "myself dr", "dr speaking", "main aap ka doctor hoon"]
+  },
+  consent: {
+    nouns: ["permission", "consent", "history", "questions", "ijazat", "approval"],
+    verbs: ["may i", "can i", "shall i", "can we", "may we", "kya main"],
+    slang: ["pehle ijazat", "ijazat dein", "history le sakta", "history le sakti", "pooch sakta", "pooch sakti", "shuru karein"]
+  },
+  complaint: {
+    nouns: ["problem", "complaint", "issue", "symptom", "masla", "takleef", "shikayat", "pareshani"],
+    verbs: ["why here", "what happened", "what is", "tell me", "kis liye", "kyun aaye"],
+    slang: ["kya masla", "kya hua", "why are you here", "what brings you here", "problem kya hai"]
+  },
+  site: {
+    nouns: ["location", "place", "site", "point", "area", "where", "position", "spot"],
+    verbs: ["where is", "point to", "show me", "mark", "exact", "kis jagah", "kidhar"],
+    slang: ["kahan dard hai", "kis taraf", "kis jagah takleef", "point karein", "dukhna kahan hai", "site kahan hai"]
+  },
+  onset: {
+    nouns: ["start", "begin", "onset", "time", "since", "chronology", "initial", "first"],
+    verbs: ["when did", "how long ago", "since when", "kab", "kab se", "how did it begin"],
+    slang: ["kab shuru", "shuruat kab", "achanak", "dheere dheere", "kab se masla", "kitni der se"]
+  },
+  duration: {
+    nouns: ["duration", "since", "length", "time period", "days", "weeks", "months"],
+    verbs: ["how long", "for how long", "since when", "kab se", "kitne din se", "kitni der se"],
+    slang: ["kabse", "kitna arsa", "problem kab se", "dard kab se", "se kab"]
+  },
+  character: {
+    nouns: ["character", "nature", "type", "quality", "sharp", "dull", "burning", "pressure", "stabbing"],
+    verbs: ["what kind", "describe", "kaisa", "kis type", "kis tarah", "nature kya"],
+    slang: ["chubhan", "jalan", "bojh", "tez dard", "halka dard", "dukhna kaisa"]
+  },
+  radiation: {
+    nouns: ["move", "spread", "travel", "radiate", "transfer", "shift"],
+    verbs: ["does it", "goes to", "kahin aur", "phailta", "failta", "jata hai"],
+    slang: ["bazu mein", "kamar mein", "jaw tak", "kahin aur jata", "spread hota", "radiation hai"]
+  },
+  severity: {
+    nouns: ["bad", "painful", "score", "scale", "intensity", "severity", "shiddat", "shadeed"],
+    verbs: ["how bad", "rate", "1 to 10", "kitna", "kitna zyada", "how severe"],
+    slang: ["severty", "shidity", "kitna dard", "tez kitna", "pain score", "severity bataein"]
+  },
+  aggravating: {
+    nouns: ["worse", "trigger", "aggravating", "exacerbation", "barhta", "increase", "provoking"],
+    verbs: ["what makes", "kis se", "worsens with", "barhta hai", "kis cheez se barhta", "badhta hai"],
+    slang: ["chalne se barhta", "movement se barhta", "khansi se barhta", "exercise se barhta", "barhta kab"]
+  },
+  relieving: {
+    nouns: ["better", "relief", "relieving", "ease", "kam", "improve"],
+    verbs: ["what makes", "kis se", "better with", "kam hota", "relieve hota", "theek hota"],
+    slang: ["aaram se kam", "rest se theek", "dawa se kam", "baithne se kam", "letne se kam"]
+  },
+  fever: {
+    nouns: ["fever", "temperature", "temp", "chills", "rigors", "shivering", "sweating", "thermometer"],
+    verbs: ["how high", "recorded", "checked", "kitna bukhar", "temp kya", "measure kiya"],
+    slang: ["bukhar", "garam", "kapkapi", "tharthari", "thand", "body hot", "fever value", "bukhar reading"]
+  },
+  respiratory: {
+    nouns: ["breath", "breathing", "cough", "sputum", "wheeze", "chest tightness", "sob", "dyspnea"],
+    verbs: ["saans", "khansi", "balgham", "seeti", "shortness of breath", "breathlessness"],
+    slang: ["saans phoolna", "khansi kab se", "balgham ka rang", "seeti ki awaz", "saans rukti", "chest tight"]
+  },
+  gi: {
+    nouns: ["stomach", "abdominal", "vomit", "nausea", "diarrhea", "constipation", "appetite", "stool"],
+    verbs: ["pait", "ulti", "matli", "dast", "qabz", "bhook", "motions", "bowel"],
+    slang: ["pait dard", "ulti hoti", "loose motions", "black stool", "pet phoolna", "khana kam"]
+  },
+  surgery: {
+    nouns: ["lump", "swelling", "mass", "ulcer", "discharge", "pus", "size", "shape", "consistency", "mobile"],
+    verbs: ["ganth", "soojan", "zakhm", "peep", "bleeding", "redness", "reducible", "goes back in"],
+    slang: ["kitna bara", "gol hai", "hard hai", "soft hai", "skin badli", "khoon aata", "gandh", "pus nikalta"]
+  },
+  peds: {
+    nouns: ["vaccination", "immunization", "birth", "feeding", "milestones", "growth", "dehydration", "urine output"],
+    verbs: ["teekay", "paidaish", "doodh", "development", "wet diapers", "child history", "baby feed"],
+    slang: ["teekay complete", "bacha sust", "aankhen dhansi", "peshab kam", "bacha doodh", "birth normal"]
+  },
+  gyn: {
+    nouns: ["period", "menstrual", "cycle", "lmp", "bleeding", "clots", "discharge", "pregnancy", "obstetric"],
+    verbs: ["mahwari", "haiz", "last period", "kitna khoon", "cycle regular", "hamal"],
+    slang: ["mahwari kab", "aakhri period", "safed pani", "thakkay", "heavy bleeding", "pregnancy chance"]
+  },
+  social: {
+    nouns: ["smoking", "alcohol", "tobacco", "drink", "social history", "occupation", "lifestyle"],
+    verbs: ["smoke", "drink", "kaam", "sharab", "cigarette", "huqqa"],
+    slang: ["do you smoke", "do you drink", "kya nasha", "rozgar kya", "aadat kya"]
+  },
+  family: {
+    nouns: ["family history", "genetic", "parents", "siblings", "khandan", "ghar mein", "hereditary"],
+    verbs: ["anyone else", "kisi ko", "run in family", "family mein", "ghar walon ko"],
+    slang: ["khandan mein kisi ko", "ghar mein kisi ko masla", "ami abu ko", "family disease"]
+  },
+  past_history: {
+    nouns: ["past history", "old illness", "diabetes", "bp", "asthma", "tb", "surgery", "hospitalization", "medication"],
+    verbs: ["before this", "previous", "pehle se", "purani", "kabi hua", "ever admitted"],
+    slang: ["purani bimari", "pehle ka masla", "sugar bp", "koi operation pehle", "regular dawa"]
+  },
+  medications: {
+    nouns: ["medication", "medicine", "drugs", "tablets", "inhaler", "insulin", "prescription"],
+    verbs: ["taking", "on treatment", "dawa lete", "regular medicine", "which medicine"],
+    slang: ["koi dawa", "dawai chal rahi", "goli", "teeka", "medicine name"]
+  },
+  allergies: {
+    nouns: ["allergy", "allergies", "drug allergy", "food allergy", "reaction"],
+    verbs: ["are you allergic", "kisi se allergy", "reaction hota", "known allergy"],
+    slang: ["allergy hai", "dawa se allergy", "koi reaction", "khane se allergy"]
+  }
+};
+
+const INTENT_CLUSTER_BLUEPRINT = {
+  surgery_physicality: {
+    nouns: ["site", "location", "place", "point", "area", "swelling", "lump", "ulcer", "hernia", "mass", "lesion", "spot", "side", "region"],
+    verbs: ["where is", "where exactly", "show me", "point to", "mark", "which side", "kis jagah", "kahan", "kidhar", "kis taraf", "location of", "site of"],
+    slang: [
+      "kahan hai", "kis jagah hai", "jaga batao", "point karo", "show me lump", "ulcer kahan", "soojan kahan",
+      "ganth kahan", "kis side pe hai", "left side hai ya right", "gardan mein hai", "taang mein hai",
+      "seene mein hai", "sirf yahin hai", "kis hisay mein", "exact jaga", "lower leg pe", "groin mein",
+      "neck side pe", "pet pe"
+    ]
+  },
+  surgery_texture: {
+    nouns: ["soft", "hard", "firm", "rubbery", "consistency", "texture", "feel", "tender", "painful", "smooth", "irregular", "fluctuant", "stony", "doughy"],
+    verbs: ["how does it feel", "is it", "touch pe", "palpation pe", "on touch", "kya lagta", "kaisa feel", "consistency kya", "texture kya"],
+    slang: [
+      "naram hai", "sakht hai", "pathar jaisa", "rubbery lagta", "dabane pe dard", "touch se pain", "smooth hai",
+      "upar se sakht", "andar se naram", "hilane pe dard", "kaisa mehsoos hota", "consistency batao",
+      "hard lump", "soft swelling", "firm ganth", "irregular surface", "chubhta hai ya nahi", "touch pe takleef"
+    ]
+  },
+  surgery_mobility: {
+    nouns: ["mobile", "fixed", "stuck", "attached", "deep", "superficial", "free", "movable", "reducible", "reposition"],
+    verbs: ["does it move", "is it fixed", "can it move", "on pressure", "moves with", "hilta hai", "chipka hua", "andar jata hai", "wapas aata", "move karta"],
+    slang: [
+      "hilta hai", "bilkul fixed hai", "jagah pe atka hai", "skin se chipka", "andar dhakelne pe chala jata",
+      "wapas nikal aata", "position change hoti", "letne pe kam", "kharay hone pe nikalta", "move karta ya nahi",
+      "juda hua lagta", "deep mein hai", "surface pe hai", "pressure se andar", "cough pe nikalta"
+    ]
+  },
+  surgery_cough_impulse: {
+    nouns: ["cough impulse", "impulse", "cough", "strain", "standing", "lifting", "exertion", "pressure", "protrusion", "bulge"],
+    verbs: ["gets bigger on", "increases with", "comes out on", "barhta hai", "khansi se", "jhatke se", "uthane se", "zor lagane se", "stress pe", "effort pe"],
+    slang: [
+      "khansi se barhta", "khansne pe nikalta", "zor lagao to ubhar aata", "weight uthao to bada", "standing pe zyada",
+      "letne pe kam", "effort se nikalta", "pet pe pressure se ubhar", "cough karun to soojan barhe",
+      "hansne ya khansi pe size barhta", "toilet pe zor lagao to nikalta", "cough impulse positive", "jhatke pe feel hota"
+    ]
+  },
+  surgery_skin_discharge: {
+    nouns: ["redness", "warmth", "shiny skin", "ulcer skin", "discharge", "pus", "peep", "bleeding", "ooze", "foul smell", "color change", "blackening", "ulcer edge", "surrounding skin"],
+    verbs: ["is there", "do you notice", "coming out", "oozing", "bleeds", "risav hota", "khoon aata", "peep nikalti", "skin badli", "rang badla"],
+    slang: [
+      "surkhi hai", "garam hai", "skin chamak rahi", "peep nikalti", "pani nikalta", "khoon aata", "badbu aati",
+      "zakhm se risav", "ulcer ke kinare kaale", "skin patli ho gayi", "upar ki skin tight", "wet dressing hoti",
+      "roz discharge", "pus yellow", "blood spotting", "skin ka rang badla", "charbi jaisi cheez nikalti"
+    ]
+  },
+  peds_birth_cluster: {
+    nouns: ["birth", "delivery", "normal delivery", "c section", "term", "preterm", "nicu", "nursery", "birth cry", "blue baby", "birth complication", "resuscitation", "hospital birth"],
+    verbs: ["was the baby", "how was", "during birth", "paidaish", "delivery hui", "operation se", "roya tha", "nicu gaya", "term pe", "preterm tha"],
+    slang: [
+      "paidaish normal thi", "operation se paida hua", "time se paida hua", "mahine poore thay", "jaldi paida hua",
+      "janam ke baad roya", "blue to nahi tha", "nursery admit hua", "nicu mein raha", "birth mein koi masla",
+      "delivery ghar pe hui", "hospital delivery thi", "birth trauma", "oxygen lagi thi", "suction hua tha"
+    ]
+  },
+  peds_nutrition_cluster: {
+    nouns: ["milk", "feed", "breastfeed", "formula", "weaning", "solid food", "appetite", "fluid intake", "dehydration", "urine", "wet diaper", "stool pattern"],
+    verbs: ["is taking", "takes", "how much", "doodh pita", "feed leta", "maa ka doodh", "upar ka doodh", "khana khata", "pani pita", "kitna feed"],
+    slang: [
+      "ma ka doodh", "formula milk", "upar ka doodh", "feed kam ho gaya", "har do ghante feed", "solid shuru",
+      "weaning start", "khana kam khata", "pani kam pita", "peshab kam", "diaper geela kam", "dast ke baad kamzor",
+      "ORS diya", "feed ke baad ulti", "bhook kam", "weight gain slow", "feeding issue", "latching problem"
+    ]
+  },
+  peds_development_cluster: {
+    nouns: ["milestones", "development", "neck holding", "sitting", "standing", "walking", "speech", "smile", "social response", "fine motor", "gross motor", "learning"],
+    verbs: ["when did", "has the child", "can the child", "milestone", "development kaisi", "gardan sambhali", "baithna shuru", "chalna shuru", "bolna shuru", "muskurata"],
+    slang: [
+      "gardan kab sambhali", "baithna kab start", "chalna kab start", "bolna kab start", "smile karta",
+      "naam pe response", "games khelta", "age ke hisab se", "development theek", "milestones delayed",
+      "late walker", "late talker", "school performance", "peer ke sath khelta", "gross motor slow",
+      "fine motor weak", "hand use kaisa", "speech delay"
+    ]
+  },
+  peds_prevention_cluster: {
+    nouns: ["vaccination", "immunization", "vaccine card", "expanded program", "polio drops", "shots", "booster", "bcg", "opv", "pentavalent", "measles", "rota", "course complete"],
+    verbs: ["is vaccinated", "received", "completed", "teekay lage", "teeka course", "card hai", "drops liye", "booster laga", "missed vaccine", "due vaccine"],
+    slang: [
+      "teekay complete", "teekay adhoore", "vaccine card dikhayein", "polio drops li", "hifazati teekay",
+      "birth ke teekay lage", "booster miss hua", "measles ka teeka", "epi schedule", "next dose due",
+      "private vaccine", "government teeka", "card gum gaya", "teeka reaction hua", "teekon ka record"
+    ]
+  },
+  gyne_menstrual_cluster: {
+    nouns: ["periods", "menses", "mahwari", "haiz", "cycle", "bleeding", "flow", "clots", "painful periods", "lmp", "last menstrual period", "spotting", "irregular cycle", "menorrhagia"],
+    verbs: ["when was", "how often", "is it regular", "kitne din", "kitna flow", "clots aate", "last period kab", "cycle kitni", "mahwari ka pattern", "bleeding kaisi"],
+    slang: [
+      "mahwari kab hui", "aakhri period kab", "cycle regular hai", "flow bohat zyada", "clots aate hain",
+      "dard ke sath period", "period miss hua", "late period", "beech mein spotting", "din kitne chalte",
+      "pad kitne use", "raat ko bhi bleeding", "period pehle se heavy", "mahwari be-tarteeb", "haiz band"
+    ]
+  },
+  gyne_obstetric_cluster: {
+    nouns: ["pregnancy", "obstetric history", "gravida", "para", "live births", "miscarriage", "abortion", "stillbirth", "delivery", "children", "pregnancy test", "antenatal care", "postnatal"],
+    verbs: ["have you been", "are you", "how many", "hamal hua", "kitne bachay", "zaya hua", "delivery hui", "pregnancy chance", "test kiya", "family planning"],
+    slang: [
+      "hamal ka chance", "kitni pregnancies", "kitne bachay", "miscarriage hua", "zaya hua tha", "normal delivery hui",
+      "operation se delivery", "recent delivery", "pregnancy test positive", "pregnancy test negative", "g p notation",
+      "antenatal visits", "postnatal issue", "bacha zinda paida", "stillbirth hua"
+    ]
+  },
+  gyne_contraception_cluster: {
+    nouns: ["contraception", "family planning", "pills", "ocp", "condom", "iud", "copper t", "injectable", "implant", "withdrawal", "lactational amenorrhea", "birth spacing"],
+    verbs: ["are you using", "do you use", "have used", "kya use karti", "bachay rokne", "planning karte", "method kya", "protection use", "prevent pregnancy", "kaunsi cheez"],
+    slang: [
+      "koi planning method", "goli leti hain", "condom use", "copper t lagwaya", "injection lagwate", "implant hai",
+      "bachay rokne ka tareeqa", "spacing rakhna", "husband protection", "without protection", "method change kiya",
+      "side effect hua", "family complete", "ab bacha nahi chahiye", "emergency pill li"
+    ]
+  }
+};
+
+function typoPermutations(term) {
+  const normalized = normalizeInput(term);
+  if (!normalized || normalized.length < 4) return [];
+  const variants = new Set();
+  variants.add(normalized.replace(/\s+/g, ""));
+  variants.add(normalized.replace(/[aeiou]/g, ""));
+  const chars = normalized.split("");
+  if (chars.length >= 5) {
+    const idx = Math.min(2, chars.length - 2);
+    const swapped = [...chars];
+    const tmp = swapped[idx];
+    swapped[idx] = swapped[idx + 1];
+    swapped[idx + 1] = tmp;
+    variants.add(swapped.join(""));
+  }
+  variants.add(normalized.replace(/([a-z])\1+/g, "$1"));
+  return [...variants].filter(Boolean);
+}
+
+function expandFromBlueprint(blueprint) {
+  const expanded = {};
+  Object.entries(blueprint).forEach(([intent, parts]) => {
+    const seeds = new Set();
+    const nouns = parts.nouns || [];
+    const verbs = parts.verbs || [];
+    const slang = parts.slang || [];
+    nouns.forEach(item => seeds.add(item));
+    verbs.forEach(item => seeds.add(item));
+    slang.forEach(item => seeds.add(item));
+    nouns.forEach(noun => {
+      verbs.forEach(verb => {
+        seeds.add(`${verb} ${noun}`);
+        seeds.add(`${noun} ${verb}`);
+        seeds.add(`${verb} the ${noun}`);
+      });
+    });
+    [...seeds].forEach(seed => typoPermutations(seed).forEach(typo => seeds.add(typo)));
+    const normalizedVariants = new Set();
+    [...seeds].forEach(seed => {
+      const normalizedSeed = normalizeInput(seed);
+      if (!normalizedSeed) return;
+      normalizedVariants.add(normalizedSeed);
+      normalizedVariants.add(normalizedSeed.replace(/\s+/g, ""));
+    });
+    expanded[intent] = [...normalizedVariants];
+  });
+  return expanded;
+}
+
+let INTENT_LIB = {};
+let INTENT_LIB_EXPANDED = {};
+let INTENT_ENTRIES_CACHE = [];
+let INTENT_KEYWORD_INDEX = new Map();
+let ROMAN_INTENT_KEYWORDS = [];
+let INTENT_ENGINE_READY = false;
+let INTENT_ENGINE_BUILDING = false;
+let INTENT_ENGINE_READY_WAITERS = [];
+let START_WHEN_BRAIN_READY_QUEUED = false;
+
+function onIntentEngineReady(waiter) {
+  if (typeof waiter !== "function") return;
+  if (INTENT_ENGINE_READY) {
+    waiter();
+    return;
+  }
+  INTENT_ENGINE_READY_WAITERS.push(waiter);
+}
+
+function notifyIntentEngineReady() {
+  if (!INTENT_ENGINE_READY_WAITERS.length) return;
+  const waiters = [...INTENT_ENGINE_READY_WAITERS];
+  INTENT_ENGINE_READY_WAITERS = [];
+  waiters.forEach(waiter => {
+    try {
+      waiter();
+    } catch (_) {}
+  });
+}
+
+const INTENT_LIB_SYSTEMS = {
+  fever: buildIntentVariants(["fever", "bukhar", "temperature", "temp", "high temp", "chills", "rigors", "kapkapi", "thand", "shivering", "sweating", "paseena", "thermometer", "reading", "max temperature", "how high fever", "kitna bukhar", "bukhar value", "documented temperature", "fever pattern", "evening rise"]),
+  respiratory: buildIntentVariants(["breath", "saans", "shortness of breath", "breathlessness", "cough", "khansi", "balgham", "sputum", "wheeze", "seeti", "chest tight", "saans phoolna", "breathing problem", "hemoptysis", "khansi mein khoon"]),
+  gi: buildIntentVariants(["pait", "stomach", "abdominal", "vomit", "vomiting", "ulti", "nausea", "matli", "dil kharab", "mann kharab", "man kharab", "ulti jaisa", "diarrhea", "dast", "constipation", "qabz", "appetite", "bhook", "stool", "motions", "blood in stool"]),
+  surgery_lump: buildIntentVariants(["lump", "swelling", "ganth", "soojan", "ulcer", "zakhm", "size", "shape", "consistency", "mobile", "fixed", "skin changes", "discharge", "pus", "peep", "bleeding", "khoon", "reducible", "goes back in"]),
+  peds_vax: buildIntentVariants(["vaccination", "immunization", "teekay", "teeke", "hifazati", "course complete", "polio drops", "epi", "vaccine card", "child vaccines"]),
+  gyn_cycle: buildIntentVariants(["periods", "mahwari", "cycle", "lmp", "last period", "bleeding", "khon", "khoon", "clots", "thakkay", "pregnancy possibility", "obstetric history"])
+};
+
+const RESPONSE_TEMPLATES = {
+  en: [
+    "{data}.",
+    "Yes, {data}.",
+    "Doctor, {data}."
+  ],
+  roman: [
+    "{data}.",
+    "Ji, {data}.",
+    "Haan doctor, {data}."
+  ],
+  negatives: {
+    en: [
+      "No, I don't have that.",
+      "Nothing like that.",
+      "No such symptom.",
+      "I have not noticed that."
+    ],
+    roman: [
+      "Nahi doctor, aisa nahi hai.",
+      "Nahi, bilkul theek hai.",
+      "Aisa kuch nahi hai.",
+      "Nahi, yeh symptom nahi.",
+      "Nahi, mujhe yeh masla nahi."
+    ]
+  },
+  protocol_reminder: {
+    en: [
+      "Doctor, please take my permission first.",
+      "Please take consent first."
+    ],
+    roman: [
+      "Doctor sahab, pehle ijazat toh lein sawal karne ki.",
+      "Doctor, pehle ijazat lein."
+    ]
+  }
+};
+
+const MISSING_DATA_RESPONSES = {
+  en: [...RESPONSE_TEMPLATES.negatives.en],
+  roman: [...RESPONSE_TEMPLATES.negatives.roman]
+};
+
+const RESPONSE_VARIANTS = {
+  en: RESPONSE_TEMPLATES.en,
+  roman: RESPONSE_TEMPLATES.roman,
+  negative: [...RESPONSE_TEMPLATES.negatives.en, ...RESPONSE_TEMPLATES.negatives.roman],
+  english: RESPONSE_TEMPLATES.en,
+  roman_urdu: RESPONSE_TEMPLATES.roman,
+  negatives: [...RESPONSE_TEMPLATES.negatives.en, ...RESPONSE_TEMPLATES.negatives.roman]
+};
+
+const RESPONSE_MATRIX = {
+  wrappers: {
+    direct: RESPONSE_TEMPLATES.en,
+    roman_urdu: RESPONSE_TEMPLATES.roman,
+    negatives: RESPONSE_VARIANTS.negative
+  }
+};
+
+const INTENT_FUZZY_THRESHOLD = 0.7;
+
+const ROMAN_KEYWORD_MARKERS = [
+  "kahan", "kab", "se", "hai", "hain", "ha", "mera", "meri", "mujhe", "aap", "kya",
+  "shuru", "kitna", "kis", "ijazat", "pooch", "masla", "takleef", "bukhar", "dard",
+  "soojan", "ganth", "mahwari", "khansi", "dawa", "teekay", "ulcer", "peshab"
+];
+
+function addKeywordIndexToken(token, bucket) {
+  if (!token || !bucket) return;
+  const normalized = normalizeInput(token);
+  if (!normalized) return;
+  if (!INTENT_KEYWORD_INDEX.has(normalized)) {
+    INTENT_KEYWORD_INDEX.set(normalized, new Set());
+  }
+  INTENT_KEYWORD_INDEX.get(normalized).add(bucket);
+}
+
+function buildIntentKeywordIndex() {
+  INTENT_KEYWORD_INDEX = new Map();
+  INTENT_ENTRIES_CACHE = Object.entries(INTENT_LIB_EXPANDED || {});
+  INTENT_ENTRIES_CACHE.forEach(([bucket, keywords]) => {
+    (keywords || []).forEach(keyword => {
+      const normalizedKeyword = normalizeInput(keyword);
+      if (!normalizedKeyword) return;
+      addKeywordIndexToken(normalizedKeyword, bucket);
+      addKeywordIndexToken(normalizedKeyword.replace(/\s+/g, ""), bucket);
+      const tokens = normalizedKeyword.split(" ").filter(Boolean);
+      tokens.forEach(token => addKeywordIndexToken(token, bucket));
+      if (tokens.length >= 2) {
+        for (let i = 0; i < tokens.length - 1; i += 1) {
+          addKeywordIndexToken(`${tokens[i]} ${tokens[i + 1]}`, bucket);
+        }
+      }
+    });
+  });
+}
+
+function initializeIntentEngine() {
+  if (INTENT_ENGINE_READY || INTENT_ENGINE_BUILDING) return;
+  INTENT_ENGINE_BUILDING = true;
+  try {
+    INTENT_LIB = Object.fromEntries(
+      Object.entries(BASE_INTENT_SEEDS).map(([key, seeds]) => [key, buildIntentVariants(seeds)])
+    );
+    INTENT_LIB_EXPANDED = {
+      ...INTENT_LIB,
+      ...expandFromBlueprint(INTENT_PERMUTATION_BLUEPRINT),
+      ...expandFromBlueprint(INTENT_CLUSTER_BLUEPRINT)
+    };
+    buildIntentKeywordIndex();
+    const words = new Set();
+    Object.values(INTENT_LIB_EXPANDED).forEach(list => {
+      (list || []).forEach(entry => {
+        const text = normalizeInput(entry);
+        if (!text) return;
+        if (ROMAN_KEYWORD_MARKERS.some(marker => phraseMatches(text, marker))) words.add(text);
+      });
+    });
+    ROMAN_INTENT_KEYWORDS = [...words];
+    INTENT_ENGINE_READY = true;
+    notifyIntentEngineReady();
+  } finally {
+    INTENT_ENGINE_BUILDING = false;
+  }
+}
+
+function scheduleIntentEngineInitialization() {
+  if (INTENT_ENGINE_READY || INTENT_ENGINE_BUILDING) return;
+  const run = () => initializeIntentEngine();
+  if (typeof requestIdleCallback === "function") {
+    requestIdleCallback(() => run(), { timeout: 1200 });
+  } else {
+    setTimeout(run, 100);
+  }
 }
 
 function romanToIntent(text) {
@@ -1796,6 +2560,328 @@ function bestIntentScore(text, patterns) {
     }
   }
   return best;
+}
+
+const LIB_BUCKET_TO_INTENT = {
+  intro: ["introduction"],
+  consent: ["consent_request"],
+  complaint: ["chief_complaint"],
+  site: ["pain_location"],
+  onset: ["onset"],
+  duration: ["duration"],
+  character: ["pain_character"],
+  radiation: ["radiation"],
+  severity: ["severity"],
+  aggravating: ["aggravating"],
+  relieving: ["relieving"],
+  fever: ["fever_detail"],
+  respiratory: ["breathlessness_detail", "cough_detail", "wheeze_detail"],
+  gi: ["nausea_detail", "vomiting_detail", "bowel_detail", "appetite_loss_detail"],
+  surgery: ["surgery_size", "surgery_shape", "surgery_skin", "surgery_discharge"],
+  surgery_physicality: ["pain_location"],
+  surgery_texture: ["surgery_shape"],
+  surgery_mobility: ["surgery_mobility"],
+  surgery_cough_impulse: ["surgery_cough_impulse"],
+  surgery_skin_discharge: ["surgery_discharge", "surgery_skin"],
+  peds: ["vaccination_history", "feeding_history", "birth_history"],
+  peds_birth_cluster: ["birth_history"],
+  peds_nutrition_cluster: ["feeding_history", "feeding_impact"],
+  peds_development_cluster: ["development_history"],
+  peds_prevention_cluster: ["vaccination_history"],
+  gyn: ["menstrual_history", "lmp_history", "obstetric_history", "bleeding_quantity", "clots_detail"],
+  gyne_menstrual_cluster: ["menstrual_history", "lmp_history", "bleeding_quantity", "clots_detail"],
+  gyne_obstetric_cluster: ["obstetric_history", "pregnancy_possibility"],
+  gyne_contraception_cluster: ["contraception_history"],
+  social: ["social_history"],
+  family: ["family_history"],
+  past_history: ["past_medical_history", "surgical_history", "medications"],
+  medications: ["medications"],
+  allergies: ["allergies"]
+};
+
+const CLINICAL_INTENTS = new Set([
+  "chief_complaint",
+  "pain_location", "onset", "duration", "pain_character", "radiation", "severity",
+  "progression", "aggravating", "relieving", "fever_detail", "temperature_value",
+  "cough_detail", "breathlessness_detail", "vomiting_detail", "bowel_detail",
+  "urinary_detail", "wheeze_detail", "headache_detail", "neuro_detail",
+  "associated_symptoms", "surgery_size", "surgery_shape", "surgery_count",
+  "surgery_skin", "surgery_reducible", "surgery_discharge", "surgery_mobility",
+  "surgery_cough_impulse", "menstrual_history",
+  "lmp_history", "obstetric_history", "pregnancy_possibility", "discharge_detail",
+  "itching_detail", "smell_detail", "bleeding_quantity", "clots_detail",
+  "feeding_history", "vaccination_history", "birth_history", "development_history",
+  "contraception_history", "past_medical_history",
+  "surgical_history", "medications", "allergies", "family_history", "social_history"
+]);
+
+const BIODATA_PUBLIC_INTENTS = new Set(["name", "age", "occupation", "address", "gender"]);
+const PRECONSENT_ALLOWED_INTENTS = new Set(["greeting", "introduction", "consent_request", ...BIODATA_PUBLIC_INTENTS]);
+
+const SPECIALTY_BUCKET_PRIORITY = {
+  SUR: [
+    "surgery_physicality",
+    "surgery_texture",
+    "surgery_mobility",
+    "surgery_cough_impulse",
+    "surgery_skin_discharge",
+    "surgery",
+    "systems_surgery",
+    "surgery_lump"
+  ],
+  PED: [
+    "peds_birth_cluster",
+    "peds_nutrition_cluster",
+    "peds_development_cluster",
+    "peds_prevention_cluster",
+    "peds",
+    "systems_pediatrics",
+    "peds_vax"
+  ],
+  GYN: [
+    "gyne_menstrual_cluster",
+    "gyne_obstetric_cluster",
+    "gyne_contraception_cluster",
+    "gyn",
+    "systems_gyne",
+    "gyn_cycle"
+  ]
+};
+
+function diceCoefficient(a, b) {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  if (a.length < 2 || b.length < 2) return 0;
+  const bigrams = str => {
+    const out = [];
+    for (let i = 0; i < str.length - 1; i += 1) out.push(str.slice(i, i + 2));
+    return out;
+  };
+  const aBigrams = bigrams(a);
+  const bBigrams = bigrams(b);
+  const counts = new Map();
+  aBigrams.forEach(bg => counts.set(bg, (counts.get(bg) || 0) + 1));
+  let matches = 0;
+  bBigrams.forEach(bg => {
+    const current = counts.get(bg) || 0;
+    if (current > 0) {
+      matches += 1;
+      counts.set(bg, current - 1);
+    }
+  });
+  return (2 * matches) / (aBigrams.length + bBigrams.length);
+}
+
+function fuzzySimilarity(a, b) {
+  const left = normalizeInput(a);
+  const right = normalizeInput(b);
+  if (!left || !right) return 0;
+  if (left === right) return 1;
+  if (phraseMatches(left, right) || phraseMatches(right, left)) return 0.98;
+  const maxLen = Math.max(left.length, right.length) || 1;
+  const levScore = Math.max(0, 1 - (levenshtein(left, right) / maxLen));
+  const diceScore = diceCoefficient(left, right);
+  const leftTokens = left.split(" ").filter(Boolean);
+  const rightTokens = right.split(" ").filter(Boolean);
+  const tokenHits = rightTokens.filter(rt => leftTokens.some(lt => lt === rt || tokenClose(lt, rt))).length;
+  const tokenScore = rightTokens.length ? (tokenHits / rightTokens.length) : 0;
+  return Math.max(levScore * 0.9, diceScore, tokenScore * 0.95);
+}
+
+function bestKeywordSimilarity(text, keywords) {
+  let best = 0;
+  const normalizedText = normalizeInput(text);
+  for (const keyword of (keywords || [])) {
+    const score = fuzzySimilarity(normalizedText, keyword);
+    if (score > best) best = score;
+    if (best >= 0.995) return best;
+  }
+  return best;
+}
+
+function mapBucketToIntents(bucket, clause) {
+  const normalizedClause = normalizeInput(clause);
+  const intents = new Set(LIB_BUCKET_TO_INTENT[bucket] || []);
+
+  if (!intents.size) {
+    if (bucket === "protocol") {
+      if (/\b(hello|hi|assalam|salam|aoa|good morning|good evening)\b/.test(normalizedClause)) intents.add("greeting");
+      if (/\b(i am dr|my name is|doctor hoon|dr hoon|student doctor|introduction)\b/.test(normalizedClause)) intents.add("introduction");
+      if (/\b(may i|can i|permission|consent|ijazat|history|ask questions|shuru)\b/.test(normalizedClause)) intents.add("consent_request");
+    }
+    if (bucket === "biodata") {
+      if (/\b(name|naam)\b/.test(normalizedClause)) intents.add("name");
+      if (/\b(age|umar|old|saal)\b/.test(normalizedClause)) intents.add("age");
+      if (/\b(gender|sex|male|female|mard|aurat)\b/.test(normalizedClause)) intents.add("gender");
+      if (/\b(address|pata|kahan se|rehte|residence)\b/.test(normalizedClause)) intents.add("address");
+      if (/\b(occupation|job|kaam|pesha)\b/.test(normalizedClause)) intents.add("occupation");
+    }
+    if (bucket === "chief_complaint") intents.add("chief_complaint");
+    if (bucket === "aggravating_relieving") {
+      if (/\b(worse|barhta|aggravat|trigger|tez|walking|walk|movement|harkat|chalne se)\b/.test(normalizedClause)) intents.add("aggravating");
+      if (/\b(better|kam|reliev|relief|aaram|dawa|rest|letne se|lying down)\b/.test(normalizedClause)) intents.add("relieving");
+      if (!intents.size) {
+        intents.add("aggravating");
+        intents.add("relieving");
+      }
+    }
+    if (bucket === "associated_symptoms") intents.add("associated_symptoms");
+    if (bucket === "background_hx") {
+      if (/\b(diabetes|sugar|bp|hypertension|asthma|tb|past|purani)\b/.test(normalizedClause)) intents.add("past_medical_history");
+      if (/\b(surgery|operation|operated)\b/.test(normalizedClause)) intents.add("surgical_history");
+      if (/\b(medicine|medication|dawa|drug)\b/.test(normalizedClause)) intents.add("medications");
+      if (/\b(allergy|allergic)\b/.test(normalizedClause)) intents.add("allergies");
+      if (/\b(family|khandan)\b/.test(normalizedClause)) intents.add("family_history");
+      if (/\b(smoke|cigarette|alcohol|sharab|social)\b/.test(normalizedClause)) intents.add("social_history");
+    }
+    if (bucket === "pediatrics_specific") {
+      if (/\b(vaccin|teek)\b/.test(normalizedClause)) intents.add("vaccination_history");
+      if (/\b(feed|doodh|milk)\b/.test(normalizedClause)) intents.add("feeding_history");
+      if (/\b(birth|paidaish|delivery)\b/.test(normalizedClause)) intents.add("birth_history");
+    }
+  }
+  if (!intents.size) return [];
+
+  if (bucket === "respiratory") {
+    if (!/\b(cough|khansi|sputum|balgham)\b/.test(normalizedClause)) intents.delete("cough_detail");
+    if (!/\b(wheeze|wheezing|seeti)\b/.test(normalizedClause)) intents.delete("wheeze_detail");
+    if (!/\b(breath|breathless|saans|shortness)\b/.test(normalizedClause)) intents.delete("breathlessness_detail");
+  }
+
+  if (bucket === "gi") {
+    const hasNauseaCue = /\b(nausea|matli|malti)\b/.test(normalizedClause) || /(dil kharab|mann kharab|man kharab)/.test(normalizedClause);
+    const hasVomitCue = /\b(vomit|vomiting|ulti)\b/.test(normalizedClause);
+    if (!hasNauseaCue) intents.delete("nausea_detail");
+    if (!hasVomitCue && !hasNauseaCue) intents.delete("vomiting_detail");
+    if (hasNauseaCue && !hasVomitCue) intents.delete("vomiting_detail");
+    if (!/\b(diarrhea|dast|stool|motions|bowel|constipation|qabz)\b/.test(normalizedClause)) intents.delete("bowel_detail");
+    if (!/\b(appetite|bhook|khana)\b/.test(normalizedClause)) intents.delete("appetite_loss_detail");
+  }
+
+  if (bucket === "surgery") {
+    if (!/\b(size|big|bara|cm|dimension)\b/.test(normalizedClause)) intents.delete("surgery_size");
+    if (!/\b(shape|gol|round|oval)\b/.test(normalizedClause)) intents.delete("surgery_shape");
+    if (!/\b(skin|red|color|overlying)\b/.test(normalizedClause)) intents.delete("surgery_skin");
+    if (!/\b(discharge|pus|peep|bleed|bleeding|khoon)\b/.test(normalizedClause)) intents.delete("surgery_discharge");
+  }
+
+  if (bucket === "surgery_physicality") {
+    if (!/\b(where|location|site|point|kahan|kidhar|jagah|jaga|side|region|show me)\b/.test(normalizedClause)) {
+      intents.delete("pain_location");
+    }
+  }
+
+  if (bucket === "surgery_texture") {
+    if (!/\b(soft|hard|firm|rubbery|naram|sakht|pathar|texture|consistency|feel|touch|smooth|irregular)\b/.test(normalizedClause)) {
+      intents.delete("surgery_shape");
+    }
+  }
+
+  if (bucket === "surgery_mobility") {
+    if (!/\b(move|mobile|fixed|stuck|hilta|chipka|attached|andar jata|goes back|deep|superficial)\b/.test(normalizedClause)) {
+      intents.delete("surgery_mobility");
+    }
+  }
+
+  if (bucket === "surgery_cough_impulse") {
+    if (!/\b(cough|khansi|impulse|comes out|ubar|strain|lifting|zor lagane|effort|standing)\b/.test(normalizedClause)) {
+      intents.delete("surgery_cough_impulse");
+    }
+  }
+
+  if (bucket === "surgery_skin_discharge") {
+    if (!/\b(discharge|pus|peep|bleed|bleeding|khoon|ooze|risav|badbu)\b/.test(normalizedClause)) intents.delete("surgery_discharge");
+    if (!/\b(skin|redness|surkhi|shiny|color|rang|warmth|surrounding|edge)\b/.test(normalizedClause)) intents.delete("surgery_skin");
+  }
+
+  if (bucket === "peds") {
+    if (!/\b(vaccin|teek)\b/.test(normalizedClause)) intents.delete("vaccination_history");
+    if (!/\b(feed|doodh|milk)\b/.test(normalizedClause)) intents.delete("feeding_history");
+    if (!/\b(birth|paidaish|delivery)\b/.test(normalizedClause)) intents.delete("birth_history");
+  }
+
+  if (bucket === "peds_birth_cluster") {
+    if (!/\b(birth|delivery|paidaish|c section|operation|term|preterm|nicu|nursery|cried|blue baby)\b/.test(normalizedClause)) {
+      intents.delete("birth_history");
+    }
+  }
+
+  if (bucket === "peds_nutrition_cluster") {
+    if (!/\b(feed|feeding|milk|doodh|breast|formula|weaning|solid|khana)\b/.test(normalizedClause)) intents.delete("feeding_history");
+    if (!/\b(appetite|bhook|dehydration|urine|peshab|wet diaper|ors|fluid)\b/.test(normalizedClause)) intents.delete("feeding_impact");
+  }
+
+  if (bucket === "peds_development_cluster") {
+    if (!/\b(milestone|development|neck holding|sitting|walking|speech|smile|chalna|baithna|bolna|gardan)\b/.test(normalizedClause)) {
+      intents.delete("development_history");
+    }
+  }
+
+  if (bucket === "peds_prevention_cluster") {
+    if (!/\b(vaccin|teek|immuniz|booster|polio|epi|card|drops)\b/.test(normalizedClause)) {
+      intents.delete("vaccination_history");
+    }
+  }
+
+  if (bucket === "gyn") {
+    if (!/\b(lmp|last period|aakhri)\b/.test(normalizedClause)) intents.delete("lmp_history");
+    if (!/\b(obstetric|gravida|para|pregnan|hamal)\b/.test(normalizedClause)) intents.delete("obstetric_history");
+    if (!/\b(bleed|khoon|khon|pad|clot|thakk)\b/.test(normalizedClause)) {
+      intents.delete("bleeding_quantity");
+      intents.delete("clots_detail");
+    }
+  }
+
+  if (bucket === "gyne_menstrual_cluster") {
+    if (!/\b(period|mahwari|haiz|cycle|menses|regular|irregular)\b/.test(normalizedClause)) intents.delete("menstrual_history");
+    if (!/\b(lmp|last period|aakhri)\b/.test(normalizedClause)) intents.delete("lmp_history");
+    if (!/\b(bleed|khoon|khon|flow|heavy|pad|clot|thakk|spotting)\b/.test(normalizedClause)) {
+      intents.delete("bleeding_quantity");
+      intents.delete("clots_detail");
+    }
+  }
+
+  if (bucket === "gyne_obstetric_cluster") {
+    if (!/\b(obstetric|gravida|para|pregnan|hamal|miscarriage|zaya|delivery|children|bachay)\b/.test(normalizedClause)) intents.delete("obstetric_history");
+    if (!/\b(pregnancy chance|pregnancy|hamal|pregnancy test|test positive|test negative)\b/.test(normalizedClause)) intents.delete("pregnancy_possibility");
+  }
+
+  if (bucket === "gyne_contraception_cluster") {
+    if (!/\b(contracept|family planning|pills|ocp|condom|iud|copper t|injectable|implant|protection|bachay rokne|spacing)\b/.test(normalizedClause)) {
+      intents.delete("contraception_history");
+    }
+  }
+
+  if (bucket === "past_history") {
+    if (!/\b(medicine|medication|dawa|drug)\b/.test(normalizedClause)) intents.delete("medications");
+    if (!/\b(surgery|operation|operated)\b/.test(normalizedClause)) intents.delete("surgical_history");
+    if (!/\b(diabetes|sugar|bp|hypertension|asthma|tb|past|purani)\b/.test(normalizedClause)) intents.delete("past_medical_history");
+  }
+
+  if (!intents.size) {
+    const strictFilterBuckets = new Set([
+      "respiratory",
+      "gi",
+      "surgery",
+      "peds",
+      "gyn",
+      "past_history",
+      "surgery_physicality",
+      "surgery_texture",
+      "surgery_mobility",
+      "surgery_cough_impulse",
+      "surgery_skin_discharge",
+      "peds_birth_cluster",
+      "peds_nutrition_cluster",
+      "peds_development_cluster",
+      "peds_prevention_cluster",
+      "gyne_menstrual_cluster",
+      "gyne_obstetric_cluster",
+      "gyne_contraception_cluster"
+    ]);
+    return strictFilterBuckets.has(bucket) ? [] : (LIB_BUCKET_TO_INTENT[bucket] || []);
+  }
+  return [...intents];
 }
 
 const LEGACY_INTENT_DICTIONARY = {
@@ -3715,10 +4801,10 @@ function buildComplaintSpecificProfile(domain, complaint) {
 
   if (domain === "Surgery") {
     const profiles = {
-      "Neck swelling": { size: "Takreeban 2 se 3 cm ki lagti hai.", shape: "Gol aur smooth si lagti hai.", count: "Sirf aik ganth hai.", skinChanges: "Upar ki skin normal hai.", reducible: "Nahi doctor, andar nahi jati.", associatedSummary: "Halka dard hota hai lekin bukhar ya weight loss nahi hua.", detailAnswers: { fever: "Nahi, bukhar nahi hai.", pain: "Zyada dard nahi, bas concern hai." } },
+      "Neck swelling": { size: "Takreeban 2 se 3 cm ki lagti hai.", shape: "Gol aur smooth si lagti hai.", count: "Sirf aik ganth hai.", skinChanges: "Upar ki skin normal hai.", reducible: "Nahi, andar nahi jati.", mobility: "Ji, thori hilti hai, fixed nahi lagti.", coughImpulse: "Nahi, khansi se barhti nahi.", associatedSummary: "Halka dard hota hai lekin bukhar ya weight loss nahi hua.", detailAnswers: { fever: "Nahi, bukhar nahi hai.", pain: "Zyada dard nahi, bas concern hai." } },
       "Inguinal swelling": { size: "Khara hon to anday jaisi ubhar aati hai.", shape: "Ubhri hui soft swelling hai.", count: "Sirf aik taraf hai.", skinChanges: "Skin normal hai.", reducible: "Ji, laitne se andar chali jati hai." },
       "Perianal discharge": { size: "Chhota sa opening jaisa hai.", shape: "Track jaisa mehsoos hota hai.", count: "Aik hi jagah hai.", skinChanges: "Area thora inflamed rehta hai.", reducible: "Reduce nahi hota." },
-      "Leg ulcer": { size: "Takreeban 3 cm ka zakhm hai.", shape: "Irregular sa zakhm hai.", count: "Aik hi ulcer hai.", skinChanges: "Atraf ki skin thori dark aur swollen hai.", reducible: "Ye reducible nahi hota.", ulcerSite: "Neechi taang par hai.", ulcerDuration: "Ek mahine se hai.", ulcerDischarge: "Kabhi halka pani ya thora sa khoon lag jata hai, lekin heavy bleeding nahi hoti.", associatedSummary: "Walking mein dard hota hai lekin bukhar zyada nahi hota.", detailAnswers: { fever: "Nahi, bukhar nahi hai.", pain: "Walk karne mein dikkat hoti hai." } },
+      "Leg ulcer": { size: "Takreeban 3 cm ka zakhm hai.", shape: "Irregular sa zakhm hai.", count: "Aik hi ulcer hai.", skinChanges: "Atraf ki skin thori dark aur swollen hai.", reducible: "Ye reducible nahi hota.", mobility: "", coughImpulse: "", ulcerSite: "Neechi taang par hai.", ulcerDuration: "Ek mahine se hai.", ulcerDischarge: "Kabhi halka pani ya thora sa khoon lag jata hai, lekin heavy bleeding nahi hoti.", associatedSummary: "Walking mein dard hota hai lekin bukhar zyada nahi hota.", detailAnswers: { fever: "Nahi, bukhar nahi hai.", pain: "Walk karne mein dikkat hoti hai." } },
       "Abdominal lump": { size: "Andazan 4 se 5 cm ki mehsoos hoti hai.", shape: "Rounded mass jaisi lagti hai.", count: "Sirf aik lump hai.", skinChanges: "Upar ki skin normal hai.", reducible: "Andar nahi jati." },
       "Thyroid swelling": { size: "Gale ke aagay noticeable si swelling hai.", shape: "Diffuse si lagti hai.", count: "Single central swelling hai.", skinChanges: "Skin par redness nahi.", reducible: "Reduce nahi hoti." },
       "Pilonidal swelling": { size: "Chhoti lekin painful boil jaisi hai.", shape: "Localized soojan hai.", count: "Aik hi swelling hai.", skinChanges: "Upar redness hai.", reducible: "Nahi." },
@@ -3842,6 +4928,7 @@ function buildCase(domain) {
   const biodataAddress = rand(["Lahore", "Karachi", "Rawalpindi", "Faisalabad", "Multan"]);
   const biodataOccupation = domain === "Pediatrics" ? "Child" : rand(occupationPool);
   const isCaregiver = domain === "Pediatrics";
+  const ageYearsWord = biodataAge === 1 ? "year" : "years";
   const complaintLabelMap = {
     "Fever": { english: "fever", roman: "bukhar" },
     "Cough": { english: "cough", roman: "khansi" },
@@ -3855,13 +4942,23 @@ function buildCase(domain) {
     "Ear discharge": { english: "ear discharge", roman: "kaan se risav" },
     "Constipation": { english: "constipation", roman: "qabz" },
     "Poor weight gain": { english: "poor weight gain", roman: "wazan kam barhna" },
-    "Dehydration concern": { english: "dehydration concern", roman: "pani ki kami" }
+    "Dehydration concern": { english: "dehydration concern", roman: "pani ki kami" },
+    "Presenting complaint": { english: "lower abdominal pain and discharge", roman: "neeche pait mein takleef aur discharge" }
   };
   const complaintLabel = complaintLabelMap[template.complaint] || {
     english: template.complaint.toLowerCase(),
     roman: template.complaint.toLowerCase()
   };
   const localizedComplaintReveal = localizeRubricValue(template.complaintReveal);
+  const defaultComplaintReveal = isCaregiver
+    ? {
+        english: `My child has ${complaintLabel.english}.`,
+        roman: `Bache ko ${complaintLabel.roman} hai.`
+      }
+    : {
+        english: `I have ${complaintLabel.english}.`,
+        roman: `Mujhe ${complaintLabel.roman} hai.`
+      };
   const complaintProfile = buildComplaintSpecificProfile(domain, template.complaint);
   const rubricAnswers = {
     greeting_ack: {
@@ -3911,7 +5008,7 @@ function buildCase(domain) {
       roman: isCaregiver ? `Mere bache ka naam ${biodataName} hai.` : `Mera naam ${biodataName} hai.`
     },
     age: {
-      english: isCaregiver ? `My child is ${biodataAge} years old.` : `I am ${biodataAge} years old.`,
+      english: isCaregiver ? `My child is ${biodataAge} ${ageYearsWord} old.` : `I am ${biodataAge} ${ageYearsWord} old.`,
       roman: isCaregiver ? `Bache ki age ${biodataAge} saal hai.` : `Meri age ${biodataAge} saal hai.`
     },
     gender: {
@@ -3926,15 +5023,10 @@ function buildCase(domain) {
       english: isCaregiver ? "My child is a child." : `I work as a ${String(biodataOccupation).toLowerCase()}.`,
       roman: isCaregiver ? "Bacha chhota hai." : `Main ${String(biodataOccupation).toLowerCase()} hoon.`
     },
-    complaintReveal: isCaregiver
-      ? {
-          english: `My child has ${complaintLabel.english}.`,
-          roman: `Bache ko ${complaintLabel.roman} hai.`
-        }
-      : {
-          english: localizedComplaintReveal.english || `I have ${complaintLabel.english}.`,
-          roman: localizedComplaintReveal.roman || `Mujhe ${complaintLabel.roman} hai.`
-        },
+    complaintReveal: {
+      english: defaultComplaintReveal.english || localizedComplaintReveal.english,
+      roman: defaultComplaintReveal.roman || localizedComplaintReveal.roman
+    },
     onset: localizeRubricValue(template.data.onset),
     duration: localizeRubricValue(template.data.duration),
     site: localizeRubricValue(template.data.site),
@@ -3956,6 +5048,8 @@ function buildCase(domain) {
     surgeryCount: localizeRubricValue((complaintProfile && complaintProfile.count) || template.swelling || null),
     surgerySkin: localizeRubricValue((complaintProfile && complaintProfile.skinChanges) || template.swellingDischarge || template.associatedSymptoms || null),
     surgeryReducible: localizeRubricValue((complaintProfile && complaintProfile.reducible) || template.data.relieving || null),
+    surgeryMobility: localizeRubricValue((complaintProfile && complaintProfile.mobility) || null),
+    surgeryCoughImpulse: localizeRubricValue((complaintProfile && complaintProfile.coughImpulse) || null),
     surgeryDischarge: localizeRubricValue((complaintProfile && complaintProfile.ulcerDischarge) || template.swellingDischarge || template.data.character || null),
     pastHistory: localizeRubricValue(template.pastHistory),
     surgicalHistory: localizeRubricValue(template.surgicalHistory || GENERIC_SH),
@@ -3988,11 +5082,13 @@ function buildCase(domain) {
     appetiteLossDetail: localizeRubricValue((complaintProfile && complaintProfile.detailAnswers && complaintProfile.detailAnswers.appetiteLoss) || null),
     lethargyDetail: localizeRubricValue((complaintProfile && complaintProfile.detailAnswers && complaintProfile.detailAnswers.lethargy) || null),
     feedingImpact: localizeRubricValue((complaintProfile && complaintProfile.detailAnswers && complaintProfile.detailAnswers.feedingImpact) || (complaintProfile && complaintProfile.feedingImpact) || null),
+    developmentHistory: localizeRubricValue((complaintProfile && complaintProfile.development) || template.developmentHistory || null),
     dischargeDetail: localizeRubricValue((complaintProfile && complaintProfile.detailAnswers && complaintProfile.detailAnswers.discharge) || null),
     itchingDetail: localizeRubricValue((complaintProfile && complaintProfile.detailAnswers && complaintProfile.detailAnswers.itching) || null),
     smellDetail: localizeRubricValue((complaintProfile && complaintProfile.detailAnswers && complaintProfile.detailAnswers.smell) || null),
     bleedingQuantity: localizeRubricValue((complaintProfile && complaintProfile.detailAnswers && complaintProfile.detailAnswers.quantity) || (complaintProfile && complaintProfile.bleedingSummary) || null),
     clotsDetail: localizeRubricValue((complaintProfile && complaintProfile.detailAnswers && complaintProfile.detailAnswers.clots) || null),
+    contraceptionHistory: localizeRubricValue((complaintProfile && complaintProfile.contraception) || template.contraceptionHistory || null),
     domainSpecific: {
       feeding: template.feeding || null,
       vaccination: template.vaccination || null,
@@ -4031,6 +5127,8 @@ function buildCase(domain) {
   rubricAnswers.surgery_count = rubricAnswers.surgeryCount;
   rubricAnswers.surgery_skin = rubricAnswers.surgerySkin;
   rubricAnswers.surgery_reducible = rubricAnswers.surgeryReducible;
+  rubricAnswers.surgery_mobility = rubricAnswers.surgeryMobility;
+  rubricAnswers.surgery_cough_impulse = rubricAnswers.surgeryCoughImpulse;
   rubricAnswers.surgery_discharge = rubricAnswers.surgeryDischarge;
   rubricAnswers.medications = rubricAnswers.drugHistory;
   rubricAnswers.allergies = rubricAnswers.allergyHistory;
@@ -4063,18 +5161,44 @@ function buildCase(domain) {
   rubricAnswers.appetite_loss_detail = rubricAnswers.appetiteLossDetail;
   rubricAnswers.lethargy_detail = rubricAnswers.lethargyDetail;
   rubricAnswers.feeding_impact = rubricAnswers.feedingImpact;
+  rubricAnswers.development_history = rubricAnswers.developmentHistory;
   rubricAnswers.discharge_detail = rubricAnswers.dischargeDetail;
   rubricAnswers.itching_detail = rubricAnswers.itchingDetail;
   rubricAnswers.smell_detail = rubricAnswers.smellDetail;
   rubricAnswers.bleeding_quantity = rubricAnswers.bleedingQuantity;
   rubricAnswers.clots_detail = rubricAnswers.clotsDetail;
+  rubricAnswers.contraception_history = rubricAnswers.contraceptionHistory;
   return {
     id: `${domain.substring(0,3).toUpperCase()}-${Math.floor(Math.random() * 9999)}`,
     domain,
     complaint: template.complaint,
     openingLine: template.openingLine,
-    complaintReveal: template.complaintReveal,
-    data: template.data,
+    complaintReveal: rubricAnswers.complaintReveal,
+    data: {
+      ...(template.data || {}),
+      complaintReveal: rubricAnswers.complaintReveal,
+      site: rubricAnswers.site,
+      onset: rubricAnswers.onset,
+      duration: rubricAnswers.duration,
+      character: rubricAnswers.character,
+      radiation: rubricAnswers.radiation,
+      severity: rubricAnswers.severity,
+      aggravating: rubricAnswers.aggravating,
+      relieving: rubricAnswers.relieving,
+      progression: rubricAnswers.progression,
+      feverDetail: rubricAnswers.feverDetail,
+      surgerySize: rubricAnswers.surgerySize,
+      surgeryShape: rubricAnswers.surgeryShape,
+      surgerySkin: rubricAnswers.surgerySkin,
+      surgeryMobility: rubricAnswers.surgeryMobility,
+      surgeryCoughImpulse: rubricAnswers.surgeryCoughImpulse,
+      surgeryDischarge: rubricAnswers.surgeryDischarge,
+      developmentHistory: rubricAnswers.developmentHistory,
+      contraceptionHistory: rubricAnswers.contraceptionHistory,
+      pastHistory: rubricAnswers.pastHistory,
+      medications: rubricAnswers.drugHistory,
+      familyHistory: rubricAnswers.familyHistory
+    },
     associatedSymptoms: template.associatedSymptoms,
     pastHistory: template.pastHistory,
     feeding: template.feeding || null,
@@ -4728,9 +5852,187 @@ function deterministicPick(source) {
 }
 
 function normalizeResponseSentence(text) {
-  const cleaned = String(text || "").trim();
+  const cleaned = String(text || "")
+    .replace(/\bmatli\b/gi, "dil kharab")
+    .replace(/\bnausea\b/gi, "dil kharab")
+    .replace(/\btashkhees\b/gi, "bimari")
+    .replace(/\b(doctor)\b[,\s]+\b\1\b/gi, "doctor")
+    .replace(/\b(ji)\b[,\s]+\b\1\b/gi, "ji")
+    .replace(/\b(yes|haan|no|nahi)\b[,\s]+\b\1\b/gi, "$1")
+    .replace(/\s{2,}/g, " ")
+    .trim();
   if (!cleaned) return "";
   return /[.!?]$/.test(cleaned) ? cleaned : `${cleaned}.`;
+}
+
+const ROMAN_NUMBER_WORDS = {
+  ek: "one",
+  aik: "one",
+  do: "two",
+  teen: "three",
+  char: "four",
+  chaar: "four",
+  paanch: "five",
+  panch: "five",
+  chay: "six",
+  che: "six",
+  saat: "seven",
+  sat: "seven",
+  aath: "eight",
+  ath: "eight",
+  nau: "nine",
+  نو: "nine",
+  dus: "ten"
+};
+
+const ROMAN_UNIT_WORDS = {
+  ghanta: "hour",
+  ghante: "hours",
+  din: "days",
+  hafta: "week",
+  hafte: "weeks",
+  haftay: "weeks",
+  mahina: "month",
+  mahine: "months",
+  saal: "years"
+};
+
+const ROMAN_TO_ENGLISH_PHRASES = [
+  ["bp ki regular dawa leti hoon", "I take regular blood pressure medicine"],
+  ["bp ki regular dawa leta hoon", "I take regular blood pressure medicine"],
+  ["baithne se thora kam hota hai", "It gets a little better with sitting"],
+  ["aaram se thora kam hota hai", "It gets a little better with rest"],
+  ["araam se thora kam hota hai", "It gets a little better with rest"],
+  ["kuch khaas se kam nahi hoti", "Nothing really relieves it"],
+  ["patti aur syrup se kam hota hai", "It improves with sponging and syrup"],
+  ["kabhi high, kabhi low ho jata hai", "It comes and goes"],
+  ["cramps jaisa lagta hai", "It feels crampy"],
+  ["dabao jaisa dard hai", "It feels like a heavy pressure"],
+  ["choti si ubhri hui soojan hai", "It is a small raised swelling"],
+  ["gardan mein swelling hai doctor", "I have neck swelling"],
+  ["seene mein dard ho raha hai doctor", "I have chest pain"],
+  ["bukhar aa raha hai doctor", "I have fever"],
+  ["bache ko bukhar aa raha hai doctor", "My child has fever"],
+  ["bache ko bukhar hai", "My child has fever"],
+  ["neeche pait mein takleef aur discharge", "lower abdominal pain and discharge"],
+  ["ji, khujli bhi hoti hai", "Yes, there is itching as well"],
+  ["kabhi halki badbu bhi hoti hai", "There is sometimes a mild bad smell"],
+  ["ji, white discharge bhi hai", "Yes, there is white discharge as well"],
+  ["do ghante se hai", "It has been there for two hours"],
+  ["do din se hai", "It has been there for two days"],
+  ["do mahine se hai", "It has been there for two months"]
+];
+
+const ENGLISH_TO_ROMAN_PHRASES = [
+  ["I take regular blood pressure medicine", "BP ki regular dawa leti hoon"],
+  ["It gets a little better with sitting", "Baithne se thora kam hota hai"],
+  ["It gets a little better with rest", "Aaram se thora kam hota hai"],
+  ["Nothing really relieves it", "Kuch khaas se kam nahi hoti"],
+  ["It improves with sponging and syrup", "Patti aur syrup se kam hota hai"],
+  ["It comes and goes", "Kabhi high, kabhi low ho jata hai"],
+  ["It feels crampy", "Cramps jaisa lagta hai"],
+  ["It feels like a heavy pressure", "Dabao jaisa dard hai"],
+  ["It is a small raised swelling", "Choti si ubhri hui soojan hai"],
+  ["I have neck swelling", "Gardan mein swelling hai doctor"],
+  ["I have chest pain", "Seene mein dard ho raha hai doctor"],
+  ["I have fever", "Bukhar aa raha hai doctor"],
+  ["My child has fever", "Bache ko bukhar aa raha hai doctor"],
+  ["lower abdominal pain and discharge", "Neeche pait mein takleef aur discharge"],
+  ["Yes, there is itching as well", "Ji, khujli bhi hoti hai"],
+  ["There is sometimes a mild bad smell", "Kabhi halki badbu bhi hoti hai"],
+  ["Yes, there is white discharge as well", "Ji, white discharge bhi hai"],
+  ["It has been there for two hours", "Do ghante se hai"],
+  ["It has been there for two days", "Do din se hai"],
+  ["It has been there for two months", "Do mahine se hai"]
+];
+
+function replaceClinicalPhraseMap(text, mappings) {
+  let output = String(text || "");
+  mappings.forEach(([from, to]) => {
+    const escaped = from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    output = output.replace(new RegExp(escaped, "gi"), to);
+  });
+  return output;
+}
+
+function translateRomanDurationToEnglish(text) {
+  let output = String(text || "");
+  output = output.replace(/^([a-z0-9]+)\s+(ghanta|ghante|din|hafta|hafte|haftay|mahina|mahine|saal)\s+se\s+(hai|hain)\.?$/i, (_, num, unit) => {
+    const number = ROMAN_NUMBER_WORDS[num.toLowerCase()] || num;
+    const translatedUnit = ROMAN_UNIT_WORDS[unit.toLowerCase()] || unit;
+    return `It has been there for ${number} ${translatedUnit}`;
+  });
+  output = output.replace(/^([0-9a-z]+)\s+se\s+([0-9a-z]+)\s+(din|hafta|hafte|haftay|mahina|mahine|saal)\s+se\s+masla\s+hai\.?$/i, (_, a, b, unit) => {
+    const first = ROMAN_NUMBER_WORDS[a.toLowerCase()] || a;
+    const second = ROMAN_NUMBER_WORDS[b.toLowerCase()] || b;
+    const translatedUnit = ROMAN_UNIT_WORDS[unit.toLowerCase()] || unit;
+    return `It has been there for ${first} to ${second} ${translatedUnit}`;
+  });
+  return output;
+}
+
+function translateEnglishDurationToRoman(text) {
+  let output = String(text || "");
+  output = output.replace(/^It has been there for ([a-z0-9]+)\s+(hour|hours|days|week|weeks|month|months|years)\.?$/i, (_, num, unit) => {
+    const reverseNumber = Object.entries(ROMAN_NUMBER_WORDS).find(([, value]) => value === String(num).toLowerCase());
+    const romanNum = reverseNumber ? reverseNumber[0] : num;
+    const unitMap = { hour: "ghanta", hours: "ghante", days: "din", week: "hafta", weeks: "haftay", month: "mahina", months: "mahine", years: "saal" };
+    return `${romanNum} ${unitMap[unit.toLowerCase()] || unit} se hai`;
+  });
+  output = output.replace(/^It has been there for ([a-z0-9]+) to ([a-z0-9]+)\s+(days|week|weeks|month|months|years)\.?$/i, (_, a, b, unit) => {
+    const reverseA = Object.entries(ROMAN_NUMBER_WORDS).find(([, value]) => value === String(a).toLowerCase());
+    const reverseB = Object.entries(ROMAN_NUMBER_WORDS).find(([, value]) => value === String(b).toLowerCase());
+    const romanA = reverseA ? reverseA[0] : a;
+    const romanB = reverseB ? reverseB[0] : b;
+    const unitMap = { days: "din", week: "hafta", weeks: "haftay", month: "mahina", months: "mahine", years: "saal" };
+    return `${romanA} se ${romanB} ${unitMap[unit.toLowerCase()] || unit} se masla hai`;
+  });
+  return output;
+}
+
+function enforceReplyLanguage(text, lang) {
+  const input = String(text || "").trim();
+  if (!input) return input;
+  const scores = responseLanguageScores(input);
+  if (lang === "en" && scores.roman > scores.english) {
+    let output = replaceClinicalPhraseMap(input, ROMAN_TO_ENGLISH_PHRASES);
+    output = translateRomanDurationToEnglish(output);
+    output = output
+      .replace(/\bbukhar\b/gi, "fever")
+      .replace(/\bdard\b/gi, "pain")
+      .replace(/\bpait\b/gi, "abdomen")
+      .replace(/\bneeche pait\b/gi, "lower abdomen")
+      .replace(/\bgardan\b/gi, "neck")
+      .replace(/\bsoojan\b/gi, "swelling")
+      .replace(/\bganth\b/gi, "lump")
+      .replace(/\bkhujli\b/gi, "itching")
+      .replace(/\bbadbu\b/gi, "bad smell")
+      .replace(/\bdawa\b/gi, "medicine")
+      .replace(/\baaram\b/gi, "rest")
+      .replace(/\bmatli\b/gi, "nausea")
+      .replace(/\bulti\b/gi, "vomiting");
+    return output;
+  }
+  if (lang === "roman" && scores.english > scores.roman) {
+    let output = replaceClinicalPhraseMap(input, ENGLISH_TO_ROMAN_PHRASES);
+    output = translateEnglishDurationToRoman(output);
+    output = output
+      .replace(/\bfever\b/gi, "bukhar")
+      .replace(/\bpain\b/gi, "dard")
+      .replace(/\babdomen\b/gi, "pait")
+      .replace(/\blower abdomen\b/gi, "neeche pait")
+      .replace(/\bneck\b/gi, "gardan")
+      .replace(/\bswelling\b/gi, "swelling")
+      .replace(/\blump\b/gi, "ganth")
+      .replace(/\bitching\b/gi, "khujli")
+      .replace(/\bbad smell\b/gi, "badbu")
+      .replace(/\bmedicine\b/gi, "dawa")
+      .replace(/\brest\b/gi, "aaram")
+      .replace(/\bnausea\b/gi, "dil kharab")
+      .replace(/\bvomiting\b/gi, "ulti");
+    return output;
+  }
+  return input;
 }
 
 function detectReplyLanguage(text) {
@@ -4841,6 +6143,8 @@ const BLOCKED_BEFORE_COMPLAINT = new Set([
   "surgery_count",
   "surgery_skin",
   "surgery_reducible",
+  "surgery_mobility",
+  "surgery_cough_impulse",
   "surgery_discharge",
   "past_medical_history",
   "surgical_history",
@@ -4870,11 +6174,13 @@ const BLOCKED_BEFORE_COMPLAINT = new Set([
   "appetite_loss_detail",
   "lethargy_detail",
   "feeding_impact",
+  "development_history",
   "discharge_detail",
   "itching_detail",
   "smell_detail",
   "bleeding_quantity",
-  "clots_detail"
+  "clots_detail",
+  "contraception_history"
 ]);
 
 const STAGE_BY_INTENT = {
@@ -4911,6 +6217,8 @@ const STAGE_BY_INTENT = {
   surgery_count: "ASSOCIATED",
   surgery_skin: "ASSOCIATED",
   surgery_reducible: "ASSOCIATED",
+  surgery_mobility: "ASSOCIATED",
+  surgery_cough_impulse: "ASSOCIATED",
   surgery_discharge: "ASSOCIATED",
   past_medical_history: "PAST_HISTORY",
   surgical_history: "PAST_HISTORY",
@@ -4940,11 +6248,13 @@ const STAGE_BY_INTENT = {
   appetite_loss_detail: "ASSOCIATED",
   lethargy_detail: "ASSOCIATED",
   feeding_impact: "ASSOCIATED",
+  development_history: "ASSOCIATED",
   discharge_detail: "ASSOCIATED",
   itching_detail: "ASSOCIATED",
   smell_detail: "ASSOCIATED",
   bleeding_quantity: "ASSOCIATED",
-  clots_detail: "ASSOCIATED"
+  clots_detail: "ASSOCIATED",
+  contraception_history: "ASSOCIATED"
 };
 
 const INTENT_TO_CASE_FIELDS = {
@@ -4981,6 +6291,8 @@ const INTENT_TO_CASE_FIELDS = {
   surgery_count: ["surgery_count"],
   surgery_skin: ["surgery_skin"],
   surgery_reducible: ["surgery_reducible"],
+  surgery_mobility: ["surgery_mobility"],
+  surgery_cough_impulse: ["surgery_cough_impulse"],
   surgery_discharge: ["surgery_discharge"],
   past_medical_history: ["past_medical_history"],
   surgical_history: ["surgical_history"],
@@ -5010,11 +6322,13 @@ const INTENT_TO_CASE_FIELDS = {
   appetite_loss_detail: ["appetite_loss_detail"],
   lethargy_detail: ["lethargy_detail"],
   feeding_impact: ["feeding_impact"],
+  development_history: ["development_history"],
   discharge_detail: ["discharge_detail"],
   itching_detail: ["itching_detail"],
   smell_detail: ["smell_detail"],
   bleeding_quantity: ["bleeding_quantity"],
-  clots_detail: ["clots_detail"]
+  clots_detail: ["clots_detail"],
+  contraception_history: ["contraception_history"]
 };
 
 const INTENT_MAP = {
@@ -5103,7 +6417,7 @@ const INTENT_MAP = {
   radiation: [["spread"], ["phail"], ["fail"], ["move", "anywhere"], ["radiate"], ["kahin", "aur", "jata"], ["goes", "to", "arm"], ["goes", "to", "back"], ["peeth", "tak"], ["arm", "tak", "jata"], ["arm", "tak"], ["back", "tak"], ["aur", "kahi", "jata"], ["kahin", "aur"], ["idhar", "udhar"]],
   pain_character: [["kis", "tarah"], ["kis", "trah"], ["kaisa"], ["kesa"], ["what", "kind"], ["type"], ["nature"], ["burning"], ["pressure"], ["qism"], ["stabbing"], ["sharp"], ["dull"], ["tightness"], ["crampy"], ["dry"], ["balgham"], ["productive"], ["phlegm"], ["kaisa", "dard"], ["what", "type"], ["kaise"], ["describe"], ["batao", "kaisa"]],
   severity: [["kitna"], ["kitni"], ["severity"], ["scale"], ["severe"], ["pain", "score"], ["out", "10"], ["how", "bad"], ["1", "10"], ["how", "high", "fever"], ["how", "much", "fever"], ["temperature", "kitna"], ["how", "much", "temperature"], ["max", "temperature"], ["kitna", "fever"], ["thermometer"], ["shadeed"], ["zyada", "hai"], ["tez", "hai"], ["how", "severe"], ["kitna", "tez"], ["kitna", "zyada"]],
-  aggravating: [["barhta"], ["worse"], ["trigger"], ["increase"], ["worsens"], ["kis", "se", "zyada"], ["walking", "se"], ["movement", "se"], ["khane", "se"], ["breathing", "se"], ["on", "exertion"]],
+  aggravating: [["barhta"], ["worse"], ["trigger"], ["increase"], ["worsens"], ["kis", "se", "zyada"], ["walking", "se"], ["movement", "se"], ["khane", "se"], ["breathing", "se"], ["on", "exertion"], ["chalne", "se"], ["harkat", "se"], ["tez", "ho", "jata"], ["activity", "se"], ["khansi", "se"]],
   relieving: [
     ["kam"],
     ["relieve"],
@@ -5121,7 +6435,12 @@ const INTENT_MAP = {
     ["what", "did", "you", "take", "for", "it"],
     ["which", "treatment", "helped"],
     ["dawa", "se", "farq"],
-    ["paracetamol", "se", "farq"]
+    ["paracetamol", "se", "farq"],
+    ["aaram"],
+    ["letne", "se"],
+    ["rest", "se", "kam"],
+    ["dawai", "se", "kam"],
+    ["so", "kar", "kam"]
   ],
   associated_symptoms: [
     ["other", "symptoms"],
@@ -5156,7 +6475,7 @@ const INTENT_MAP = {
   urine_output: [["urine", "kam"], ["kam", "urine"], ["peshab", "kam"], ["wet", "diapers"], ["diaper", "wet"]],
   sunken_eyes: [["sunken", "eyes"], ["aankhen", "dhansi"], ["eyes", "sunken"]],
   pregnancy_possibility: [["pregnancy", "chance"], ["pregnant"], ["hamal", "ho"], ["pregnancy", "possible"]],
-  nausea_detail: [["nausea"], ["matli"], ["morning", "sickness"], ["subah", "nausea"], ["subah", "matli"]],
+  nausea_detail: [["nausea"], ["matli"], ["morning", "sickness"], ["subah", "nausea"], ["subah", "matli"], ["dil", "kharab"], ["mann", "kharab"], ["man", "kharab"], ["ulti", "jaisa"], ["vomiting"]],
   feeding_history: [["feeding"], ["feed"], ["milk"], ["doodh"]],
   vaccination_history: [["vaccination"], ["immunization"], ["teek"], ["vaccine"]],
   birth_history: [["birth", "history"], ["paidaish"], ["delivery"]],
@@ -5390,7 +6709,8 @@ const INTENT_PHRASES = {
     "1 se 10 tak"
   ],
   aggravating: [
-    "what makes it worse", "what worsens it", "kis se barhta hai", "kis cheez se zyada hota hai", "worse with"
+    "what makes it worse", "what worsens it", "kis se barhta hai", "kis cheez se zyada hota hai", "worse with",
+    "chalne se barhta hai", "walking se barhta hai", "harkat se barhta hai", "movement se barhta hai", "tez ho jata hai"
   ],
   relieving: [
     "what makes it better",
@@ -5411,7 +6731,12 @@ const INTENT_PHRASES = {
     "treated before",
     "is ka pehle ilaj hua hai",
     "rest helps",
-    "rest se theek hota hai"
+    "rest se theek hota hai",
+    "aaram se kam hota hai",
+    "letne se kam hota hai",
+    "dawai se kam hota hai",
+    "medicine se relief",
+    "baithne se behtar hota hai"
   ],
   documented_temp: [
     "thermometer",
@@ -5462,7 +6787,8 @@ const INTENT_PHRASES = {
     "pregnancy ka chance hai", "could you be pregnant", "is pregnancy possible", "pregnant ho sakti hain"
   ],
   nausea_detail: [
-    "is there nausea", "do you have nausea", "subah matli hoti hai", "morning sickness", "matli hoti hai", "ji ghabrata hai", "ulti aane ko karti hai"
+    "is there nausea", "do you have nausea", "subah matli hoti hai", "morning sickness", "matli hoti hai", "ji ghabrata hai", "ulti aane ko karti hai",
+    "dil kharab hota hai", "mann kharab hota hai", "man kharab hota hai", "ulti jaisa lagta hai", "dil ghabrata hai", "nausea hai"
   ],
   feeding_history: [
     "feeding history", "feeding", "how is feeding", "milk intake", "doodh peeta hai", "feed kaisa hai"
@@ -5621,11 +6947,13 @@ const INTENT_PRIORITY = [
   "appetite_loss_detail",
   "lethargy_detail",
   "feeding_impact",
+  "development_history",
   "discharge_detail",
   "itching_detail",
   "smell_detail",
   "bleeding_quantity",
   "clots_detail",
+  "contraception_history",
   "associated_symptoms",
   "feeding_history",
   "vaccination_history",
@@ -5638,6 +6966,8 @@ const INTENT_PRIORITY = [
   "surgery_count",
   "surgery_skin",
   "surgery_reducible",
+  "surgery_mobility",
+  "surgery_cough_impulse",
   "surgery_discharge",
   "past_medical_history",
   "surgical_history",
@@ -5651,18 +6981,120 @@ function isDetailIntent(intent) {
   return BLOCKED_BEFORE_COMPLAINT.has(intent);
 }
 
-function getRubricAnswer(activeCase, rubricKey, languageMode) {
-  const answer = activeCase.rubricAnswers ? activeCase.rubricAnswers[rubricKey] : "";
-  if (!answer) return "";
-  if (typeof answer === "string") return normalizeResponseSentence(answer);
-  if (Array.isArray(answer)) return normalizeResponseSentence(selectLocalizedValue(answer, languageMode));
-  if (typeof answer === "object") {
-    const value = languageMode === "roman"
-      ? (answer.roman || answer.english || "")
-      : (answer.english || answer.roman || "");
-    return normalizeResponseSentence(value);
+const FIELD_ALIASES = {
+  pain_location: ["site", "pain_location"],
+  pain_character: ["character", "pain_character"],
+  temperature_value: ["temperatureValue", "temperature_value", "feverDetail", "fever_detail"],
+  documented_temp: ["documentedTemp", "documented_temp"],
+  medications: ["drugHistory", "medications", "medication", "medicine"],
+  allergies: ["allergyHistory", "allergies", "allergy"],
+  past_medical_history: ["pastHistory", "past_medical_history"],
+  surgical_history: ["surgicalHistory", "pastSurgicalHistory", "surgical_history"],
+  family_history: ["familyHistory", "family_history"],
+  social_history: ["socialHistory", "personalSocial", "social_history"],
+  surgery_size: ["surgerySize", "surgery_size"],
+  surgery_shape: ["surgeryShape", "surgery_shape"],
+  surgery_count: ["surgeryCount", "surgery_count"],
+  surgery_skin: ["surgerySkin", "surgery_skin"],
+  surgery_reducible: ["surgeryReducible", "surgery_reducible"],
+  surgery_mobility: ["surgeryMobility", "surgery_mobility"],
+  surgery_cough_impulse: ["surgeryCoughImpulse", "surgery_cough_impulse"],
+  surgery_discharge: ["surgeryDischarge", "surgery_discharge"],
+  chief_complaint: ["complaintReveal", "chief_complaint"],
+  associated_symptoms: ["associatedSymptoms", "associated_symptoms"],
+  cough_detail: ["coughDetail", "cough_detail"],
+  fever_detail: ["feverDetail", "fever_detail"],
+  breathlessness_detail: ["breathlessnessDetail", "breathlessness_detail"],
+  vomiting_detail: ["vomitingDetail", "vomiting_detail"],
+  bowel_detail: ["bowelDetail", "bowel_detail"],
+  urinary_detail: ["urinaryDetail", "urinary_detail"],
+  orthopnea_detail: ["orthopneaDetail", "orthopnea_detail"],
+  pnd_detail: ["pndDetail", "pnd_detail"],
+  edema_detail: ["edemaDetail", "edema_detail"],
+  wheeze_detail: ["wheezeDetail", "wheeze_detail"],
+  headache_detail: ["headacheDetail", "headache_detail"],
+  neuro_detail: ["neuroDetail", "neuro_detail"],
+  appetite_loss_detail: ["appetiteLossDetail", "appetite_loss_detail"],
+  lethargy_detail: ["lethargyDetail", "lethargy_detail"],
+  feeding_impact: ["feedingImpact", "feeding_impact"],
+  development_history: ["developmentHistory", "development_history"],
+  discharge_detail: ["dischargeDetail", "discharge_detail"],
+  itching_detail: ["itchingDetail", "itching_detail"],
+  smell_detail: ["smellDetail", "smell_detail"],
+  bleeding_quantity: ["bleedingQuantity", "bleeding_quantity"],
+  clots_detail: ["clotsDetail", "clots_detail"],
+  contraception_history: ["contraceptionHistory", "contraception_history", "obstetricHistory"]
+};
+
+function resolveLocalizedValue(value, languageMode) {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return selectLocalizedValue(value, languageMode);
+  if (typeof value === "object") {
+    if (languageMode === "roman") return value.roman || value.english || "";
+    if (languageMode === "english") return value.english || value.roman || "";
+    return value.english || value.roman || "";
   }
   return "";
+}
+
+function resolveCaseDataValue(activeCase, field, languageMode) {
+  if (!activeCase) return "";
+  const keys = [field, ...(FIELD_ALIASES[field] || [])];
+  for (const key of keys) {
+    const fromData = activeCase.data && activeCase.data[key];
+    const resolvedData = resolveLocalizedValue(fromData, languageMode);
+    if (resolvedData) return resolvedData;
+
+    const fromCase = activeCase[key];
+    const resolvedCase = resolveLocalizedValue(fromCase, languageMode);
+    if (resolvedCase) return resolvedCase;
+
+    const fromRubric = activeCase.rubricAnswers && activeCase.rubricAnswers[key];
+    const resolvedRubric = resolveLocalizedValue(fromRubric, languageMode);
+    if (resolvedRubric) return resolvedRubric;
+  }
+  return "";
+}
+
+function generateResponse(intentKey, activeCase, language = "en") {
+  const lang = language === "roman" ? "roman" : "en";
+  let rawFact = "";
+
+  if (activeCase && activeCase.data && Object.prototype.hasOwnProperty.call(activeCase.data, intentKey)) {
+    rawFact = resolveLocalizedValue(activeCase.data[intentKey], lang === "roman" ? "roman" : "english");
+  }
+  if (!rawFact) {
+    rawFact = resolveCaseDataValue(activeCase, intentKey, lang === "roman" ? "roman" : "english");
+  }
+
+  const fact = String(rawFact || "").trim();
+  if (!fact || /^none$/i.test(fact) || /^n\/a$/i.test(fact) || /^not known$/i.test(fact)) {
+    if (intentKey === "radiation") {
+      return lang === "roman" ? "Nahi, kahin aur nahi jata." : "No, it does not spread anywhere else.";
+    }
+    const missingTemplates = (MISSING_DATA_RESPONSES[lang] && MISSING_DATA_RESPONSES[lang].length)
+      ? MISSING_DATA_RESPONSES[lang]
+      : MISSING_DATA_RESPONSES.en;
+    const missingTemplate = missingTemplates[Math.floor(Math.random() * missingTemplates.length)];
+    return normalizeResponseSentence(missingTemplate);
+  }
+
+  const bareFact = fact.replace(/[.!?]+$/g, "").trim();
+  const languageLockedFact = enforceReplyLanguage(bareFact, lang);
+  if (/^(no\b|nahi\b|not\b|none\b|yes\b|haan\b|ji\b|doctor\b|my name\b|mera naam\b|my child\b|mere bache\b|bache ka naam\b|it is\b|i have\b)/i.test(languageLockedFact)) {
+    return normalizeResponseSentence(languageLockedFact);
+  }
+
+  const baseTemplates = RESPONSE_TEMPLATES[lang] || RESPONSE_TEMPLATES.en;
+  const templates = baseTemplates.filter(tpl => !/^\s*(No,|Nahi,)/i.test(tpl));
+  const availableTemplates = templates.length ? templates : baseTemplates;
+  const selectedTemplate = availableTemplates[Math.floor(Math.random() * availableTemplates.length)];
+  return normalizeResponseSentence(selectedTemplate.replace("{data}", languageLockedFact));
+}
+
+function getRubricAnswer(activeCase, field, lang) {
+  return generateResponse(field, activeCase, lang === "roman" ? "roman" : "en");
 }
 
 function tokenPatternScore(normalizedText, pattern) {
@@ -6252,6 +7684,8 @@ function isIntentSupportedByCurrentRubric(intent, state) {
     surgery_count: () => hasKey("number") || hasLabel("single or multiple"),
     surgery_skin: () => hasKey("skin") || hasLabel("skin"),
     surgery_reducible: () => hasKey("reducible") || hasLabel("reducible"),
+    surgery_mobility: () => hasKey("mobile") || hasLabel("mobile") || hasLabel("fixed"),
+    surgery_cough_impulse: () => hasKey("cough") || hasLabel("cough impulse") || hasLabel("barhta"),
     surgery_discharge: () => hasKey("discharge") || hasLabel("discharge"),
     past_medical_history: () => hasKey("hx_med") || hasLabel("past medical") || hasLabel("past history"),
     surgical_history: () => hasKey("surgical") || hasLabel("surgical"),
@@ -6383,7 +7817,7 @@ function updateConversationStateFromIntents(intents, state, activeCase) {
   }
 }
 
-function handleUserMessage(userText) {
+function handleUserMessageLegacy(userText) {
   const normalized = normalizeInput(userText);
 
   // ──── GRATITUDE HANDLING: "shukriya", "thank you", "thanks", "meherbani" ────
@@ -6491,7 +7925,7 @@ function handleUserMessage(userText) {
   const reply = generateStrictPatientReply(supportedIntents, appState, appState.activeCase, languageMode);
 
   // Check if it's a meaningful reply (not a fallback)
-  const isFallback = !reply || UNCLEAR_REPLIES.includes(reply) || EARLY_DETAIL_REPLIES.includes(reply);
+  const isFallback = !reply || isUnclearReply(reply) || EARLY_DETAIL_REPLIES.includes(reply);
   if (!isFallback) {
     scoreQuestion(userText);
     appState.consecutiveFallback = 0;
@@ -6510,6 +7944,929 @@ function handleUserMessage(userText) {
   });
 
   return reply || getUnclearReply();
+}
+
+// Deterministic strict engine (overrides legacy pipeline)
+function detectIntents(userText, state = appState) {
+  const normalized = normalizeInput(userText);
+  if (!normalized) return [];
+
+  const detected = new Set();
+  const units = splitIntentClauses(normalized);
+  const activeDomain = (state.activeCase && state.activeCase.domain) || (state.student && state.student.domain) || "";
+  const addIntent = intent => { if (intent) detected.add(intent); };
+
+  if (scoreIntentInText(normalized, "name") >= 2 && scoreIntentInText(normalized, "age") >= 2) {
+    addIntent("name");
+    addIntent("age");
+  }
+  if (scoreIntentInText(normalized, "aggravating") >= 2 && scoreIntentInText(normalized, "relieving") >= 2) {
+    addIntent("aggravating");
+    addIntent("relieving");
+  }
+
+  units.forEach(unit => {
+    const clause = normalizeInput(unit);
+
+    // Clinical dictionary nested-loop matcher
+    Object.keys(CLINICAL_INTENT_MAP).forEach(section => {
+      if (!["protocol", "socrates", "background"].includes(section)) return;
+      const sectionMap = CLINICAL_INTENT_MAP[section] || {};
+      Object.keys(sectionMap).forEach(node => {
+        const phrases = sectionMap[node] || [];
+        const matched = phrases.some(phrase => phraseMatches(clause, phrase));
+        if (!matched) return;
+        const mapped = CLINICAL_NODE_TO_INTENT[section] && CLINICAL_NODE_TO_INTENT[section][node];
+        if (mapped) addIntent(mapped);
+      });
+    });
+
+    // Core subjective history cues
+    if (/\b(why are you here|what brings you here|what is the problem|kya masla|kya hua|takleef|shikayat)\b/.test(clause)) addIntent("chief_complaint");
+    if (/\b(kab se|kabse|since when|how long)\b/.test(clause)) addIntent("duration");
+    if (/\b(when did|kab hua|kab shuru|how did it start|start)\b/.test(clause)) addIntent("onset");
+    if (/\b(kahan|kidhar|where|location|site)\b/.test(clause)) addIntent("pain_location");
+    if (/\b(kis type|what kind|nature|character|kaisa|kis tarah)\b/.test(clause)) addIntent("pain_character");
+    if (/\b(spread|radiate|phail|fail|kahin aur)\b/.test(clause)) addIntent("radiation");
+    if (/\b(how severe|how bad|severity|kitna|shiddat|out of 10|1 to 10|scale)\b/.test(clause)) {
+      if (/\b(fever|bukhar|temperature)\b/.test(clause)) addIntent("temperature_value");
+      else addIntent("severity");
+    }
+    if (/\b(getting worse|barh raha|progress|increasing)\b/.test(clause)) addIntent("progression");
+    if (/\b(what makes it worse|kis se barhta|worse with|aggravating)\b/.test(clause)) addIntent("aggravating");
+    if (/\b(what relieves|what makes it better|kis se kam|better with|relieving)\b/.test(clause)) addIntent("relieving");
+
+    // Drug / surgery / family hard coverage
+    if (/\b(do you take any medication|are you on any medicine|taking any drugs|koi dawa lete hain|kya koi treatment chal raha hai|regular medicine|drug history|on medication|on medicine|currently on treatment)\b/.test(clause)) {
+      addIntent("medications");
+    }
+    if (/\b(have you had any surgeries|any operations|surgery history|koi operation hua hai|pehle operation hua|operated before|surgical history)\b/.test(clause)) {
+      addIntent("surgical_history");
+    }
+    if (/\b(any family history|family history|khandan|ghar mein kisi ko)\b/.test(clause)) addIntent("family_history");
+    if (/\b(any allergies|allergy|allergic|kisi dawa se allergy)\b/.test(clause)) addIntent("allergies");
+    if (/\b(past history|past illness|previous illness|purani bimari|pehle se bimari|diabetes|blood pressure|hypertension|asthma|tb)\b/.test(clause)) addIntent("past_medical_history");
+    if (/\b(smoke|smoker|cigarette|alcohol|drink)\b/.test(clause)) addIntent("social_history");
+
+    // Associated/system details
+    if (/\b(fever|bukhar)\b/.test(clause)) addIntent("fever_detail");
+    if (/\b(cough|khansi)\b/.test(clause)) addIntent("cough_detail");
+    if (/\b(vomiting|ulti)\b/.test(clause)) addIntent("vomiting_detail");
+    if (/\b(diarrhea|dast|loose motions|stool)\b/.test(clause)) addIntent("bowel_detail");
+    if (/\b(urine|peshab|burning|jalan)\b/.test(clause)) addIntent("urinary_detail");
+    if (/\b(shortness of breath|breathlessness|saans|breathing problem)\b/.test(clause)) addIntent("breathlessness_detail");
+    if (/\b(wheeze|wheezing|seeti)\b/.test(clause)) addIntent("wheeze_detail");
+    if (/\b(headache|sar dard|sar pain|head pain|numbness|weakness|dizziness|chakkar|tingling)\b/.test(clause)) {
+      addIntent("headache_detail");
+      addIntent("neuro_detail");
+    }
+    if (/\b(thermometer|temperature|how high|kitna bukhar|value|reading)\b/.test(clause)) {
+      addIntent("documented_temp");
+      addIntent("temperature_value");
+    }
+    if (/\b(chills|rigors|kapkapi|tharthari)\b/.test(clause)) addIntent("chills_detail");
+    if (/\b(runny nose|flu|sore throat|ear pain|naak|gala|kaan)\b/.test(clause)) addIntent("ent_detail");
+    if (/\b(orthopnea|pillows|letne par|lying flat)\b/.test(clause)) addIntent("orthopnea_detail");
+    if (/\b(pnd|wake up breathless|wake up at night|night short of breath|raat mein uth|neend se uth|raat ko uth)\b/.test(clause)) addIntent("pnd_detail");
+    if (/\b(edema|swelling in legs|pairon mein soojan)\b/.test(clause)) addIntent("edema_detail");
+
+    // Pediatrics
+    if (activeDomain === "Pediatrics") {
+      if (/\b(vaccination|teekay|immunization)\b/.test(clause)) addIntent("vaccination_history");
+      if (/\b(feeding|feed|doodh|weaning)\b/.test(clause)) addIntent("feeding_history");
+      if (/\b(birth history|delivery|paidaish)\b/.test(clause)) addIntent("birth_history");
+      if (/\b(lethargy|sust|less active)\b/.test(clause)) addIntent("lethargy_detail");
+      if (/\b(urine output|wet diapers|peshab kam)\b/.test(clause)) addIntent("urine_output");
+      if (/\b(sunken eyes|aankhen dhansi)\b/.test(clause)) addIntent("sunken_eyes");
+    }
+
+    // Surgery
+    if (activeDomain === "Surgery") {
+      if (/\b(size|kitna bara|dimension)\b/.test(clause)) addIntent("surgery_size");
+      if (/\b(shape|gol|round|oval|irregular)\b/.test(clause)) addIntent("surgery_shape");
+      if (/\b(single|multiple|kitni|one or many)\b/.test(clause)) addIntent("surgery_count");
+      if (/\b(skin|redness|overlying skin|around ulcer)\b/.test(clause)) addIntent("surgery_skin");
+      if (/\b(reducible|andar chala jata|goes back in)\b/.test(clause)) addIntent("surgery_reducible");
+      if (/\b(discharge|pus|peep|bleed|bleeding|khoon)\b/.test(clause)) addIntent("surgery_discharge");
+    }
+
+    // Gyne
+    if (activeDomain === "Gynecology") {
+      if (/\b(menstrual|period|mahwari|cycle)\b/.test(clause)) addIntent("menstrual_history");
+      if (/\b(lmp|last period|aakhri period|last menstrual)\b/.test(clause)) addIntent("lmp_history");
+      if (/\b(obstetric|pregnancy history|gravida|para|kitne bachay)\b/.test(clause)) addIntent("obstetric_history");
+      if (/\b(pregnant|pregnancy ka chance|hamal)\b/.test(clause)) addIntent("pregnancy_possibility");
+      if (/\b(discharge|safed pani)\b/.test(clause)) addIntent("discharge_detail");
+      if (/\b(itching|khujli)\b/.test(clause)) addIntent("itching_detail");
+      if (/\b(smell|badbu|foul)\b/.test(clause)) addIntent("smell_detail");
+      if (/\b(heavy bleeding|kitni bleeding|pads|clots|thakkay)\b/.test(clause)) {
+        addIntent("bleeding_quantity");
+        addIntent("clots_detail");
+      }
+    }
+
+    // Existing intent banks fallback
+    const legacyIntent = matchIntent(clause);
+    if (legacyIntent) addIntent(legacyIntent);
+  });
+
+  return [...detected].sort((a, b) => {
+    const ia = INTENT_PRIORITY.indexOf(a);
+    const ib = INTENT_PRIORITY.indexOf(b);
+    if (ia === -1 && ib === -1) return a.localeCompare(b);
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
+}
+
+function validateIntentAgainstStage(intents, state) {
+  if (!intents.length) return { ok: false, message: DEFAULT_UNKNOWN_REPLY };
+
+  const hasClinicalIntent = intents.some(intent => !PRECONSENT_ALLOWED_INTENTS.has(intent));
+  if (!state.consentStatus && hasClinicalIntent) {
+    return { ok: false, message: EARLY_CONSENT_REMINDER };
+  }
+  return { ok: true };
+}
+
+function generateStrictPatientReply(intents, state, activeCase, languageMode) {
+  const ordered = [...new Set(intents.filter(Boolean))];
+  if (!ordered.length) return getUnclearReply();
+
+  const repeatsOnly = ordered.every(intent => state.disclosed.has(intent) && !["greeting", "introduction", "consent_request"].includes(intent));
+  if (repeatsOnly) {
+    return languageMode === "roman"
+      ? "Doctor, is ka jawab pehle de chuka hoon."
+      : "Doctor, I already shared that.";
+  }
+
+  const replies = [];
+  ordered.forEach(intent => {
+    const rubricFields = INTENT_TO_CASE_FIELDS[intent] || [];
+    if (!rubricFields.length) return;
+    const fieldReply = rubricFields
+      .map(field => getRubricAnswer(activeCase, field, languageMode))
+      .find(Boolean);
+    if (fieldReply) replies.push(fieldReply);
+  });
+
+  const uniqueReplies = [...new Set(replies)];
+  return uniqueReplies.length ? uniqueReplies.join(" ") : getUnclearReply();
+}
+
+function updateConversationStateFromIntents(intents, state, activeCase) {
+  const uniqueIntents = [...new Set((intents || []).filter(Boolean))];
+  if (uniqueIntents.includes("greeting")) state.greeted = true;
+  if (uniqueIntents.includes("introduction")) state.introduced = true;
+  if (!state.consentStatus && uniqueIntents.some(intent => BIODATA_PUBLIC_INTENTS.has(intent))) {
+    state.conversationStage = "BIODATA";
+  }
+  if (uniqueIntents.includes("consent_request") || state.consentStatus || state.consentTaken) {
+    state.consentTaken = true;
+    state.consentStatus = true;
+    if (state.conversationStage !== "CLINICAL") {
+      state.conversationStage = "CONSENT";
+    }
+  }
+  if (uniqueIntents.includes("chief_complaint")) {
+    state.complaintElicited = true;
+    state.lastComplaint = activeCase && activeCase.complaint ? activeCase.complaint : state.lastComplaint;
+    state.stage = "HOPC";
+  }
+
+  const hasClinicalIntent = uniqueIntents.some(intent => CLINICAL_INTENTS.has(intent));
+  if (hasClinicalIntent && state.consentStatus) {
+    state.conversationStage = "CLINICAL";
+  }
+
+  uniqueIntents.forEach(intent => {
+    const nextStage = STAGE_BY_INTENT[intent];
+    if (nextStage) state.stage = nextStage;
+    if (SOCRATES_INTENTS.has(intent)) state.socratesCovered.add(intent);
+  });
+  state.socratesCount = state.socratesCovered.size;
+}
+
+const INTENT_RESPONSE_FIELD_MAP = {
+  greeting: "greeting",
+  introduction: "introduction",
+  consent_request: "consent_request",
+  name: "name",
+  age: "age",
+  gender: "gender",
+  address: "address",
+  occupation: "occupation",
+  chief_complaint: "complaintReveal",
+  onset: "onset",
+  duration: "duration",
+  pain_location: "site",
+  pain_character: "character",
+  radiation: "radiation",
+  severity: "severity",
+  progression: "progression",
+  aggravating: "aggravating",
+  relieving: "relieving",
+  documented_temp: "documentedTemp",
+  temperature_value: "temperatureValue",
+  ent_detail: "entDetail",
+  chills_detail: "chillsDetail",
+  frequency_detail: "frequencyDetail",
+  urine_output: "urineOutput",
+  sunken_eyes: "sunkenEyes",
+  pregnancy_possibility: "pregnancyPossibility",
+  nausea_detail: "nauseaDetail",
+  sweating_detail: "sweatingDetail",
+  breathlessness_detail: "breathlessnessDetail",
+  cough_detail: "coughDetail",
+  fever_detail: "feverDetail",
+  vomiting_detail: "vomitingDetail",
+  bowel_detail: "bowelDetail",
+  urinary_detail: "urinaryDetail",
+  orthopnea_detail: "orthopneaDetail",
+  pnd_detail: "pndDetail",
+  edema_detail: "edemaDetail",
+  wheeze_detail: "wheezeDetail",
+  headache_detail: "headacheDetail",
+  neuro_detail: "neuroDetail",
+  appetite_loss_detail: "appetiteLossDetail",
+  lethargy_detail: "lethargyDetail",
+  feeding_impact: "feedingImpact",
+  development_history: "developmentHistory",
+  discharge_detail: "dischargeDetail",
+  itching_detail: "itchingDetail",
+  smell_detail: "smellDetail",
+  bleeding_quantity: "bleedingQuantity",
+  clots_detail: "clotsDetail",
+  contraception_history: "contraceptionHistory",
+  associated_symptoms: "associatedSymptoms",
+  feeding_history: "feedingHistory",
+  vaccination_history: "vaccinationHistory",
+  birth_history: "birthHistory",
+  menstrual_history: "menstrualHistory",
+  lmp_history: "lmpHistory",
+  obstetric_history: "obstetricHistory",
+  surgery_size: "surgerySize",
+  surgery_shape: "surgeryShape",
+  surgery_count: "surgeryCount",
+  surgery_skin: "surgerySkin",
+  surgery_reducible: "surgeryReducible",
+  surgery_mobility: "surgeryMobility",
+  surgery_cough_impulse: "surgeryCoughImpulse",
+  surgery_discharge: "surgeryDischarge",
+  past_medical_history: "pastHistory",
+  surgical_history: "surgicalHistory",
+  medications: "drugHistory",
+  allergies: "allergyHistory",
+  family_history: "familyHistory",
+  social_history: "socialHistory"
+};
+
+function detectMatrixLanguage(userText) {
+  const raw = String(userText || "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const englishMarkers = [
+    "what", "when", "where", "why", "how", "is", "are", "do", "does", "did", "can", "may",
+    "name", "age", "history", "problem", "pain", "fever", "cough", "breathing", "medicine",
+    "medication", "allergy", "family", "start", "since", "kind", "severe", "better", "worse",
+    "period", "discharge", "itching", "smell", "bleeding"
+  ];
+  const romanMarkers = [
+    "kya", "kab", "kabse", "kab se", "kahan", "kyun", "kis", "kitna", "kitni", "aap", "mera",
+    "meri", "mujhe", "hai", "hain", "ha", "se", "ka", "ki", "ke", "dil", "kharab", "ulti",
+    "bukhar", "dard", "soojan", "ganth", "mahwari", "teekay", "ijazat", "pooch", "khujli",
+    "badbu", "aaram", "barhta", "kam", "shuru", "takleef", "masla"
+  ];
+  const englishScore = englishMarkers.filter(word => raw.includes(word)).length;
+  const romanScore = romanMarkers.filter(word => raw.includes(word)).length;
+  if (englishScore > romanScore) return "en";
+  if (romanScore > englishScore) return "roman";
+  if (/\b(kya|kab|kahan|kis|aap|mujhe|hai|hain|bukhar|dard|khujli|badbu|aaram|barhta|kam)\b/.test(raw)) return "roman";
+  return "en";
+}
+
+function getOrderedIntentEntriesForClause(normalizedClause, specialtyKey) {
+  const expandedEntries = INTENT_ENTRIES_CACHE.length ? INTENT_ENTRIES_CACHE : Object.entries(INTENT_LIB_EXPANDED || {});
+  const baseEntries = Object.entries(INTENT_LIB || {});
+  if (!expandedEntries.length) return [];
+
+  const preferredNames = SPECIALTY_BUCKET_PRIORITY[specialtyKey] || [];
+  const addPreferred = (out, seen) => {
+    preferredNames.forEach(name => {
+      const list = INTENT_LIB_EXPANDED[name];
+      if (Array.isArray(list) && !seen.has(name)) {
+        out.push([name, list]);
+        seen.add(name);
+      }
+    });
+  };
+
+  if (!INTENT_ENGINE_READY || !INTENT_KEYWORD_INDEX.size) {
+    const out = [];
+    const seen = new Set();
+    addPreferred(out, seen);
+    const fallbackEntries = baseEntries.length ? baseEntries : expandedEntries;
+    fallbackEntries.forEach(([name, list]) => {
+      if (!seen.has(name)) {
+        out.push([name, list]);
+        seen.add(name);
+      }
+    });
+    return out;
+  }
+
+  const tokens = normalizedClause.split(" ").filter(Boolean);
+  const candidates = new Set();
+  const compact = normalizedClause.replace(/\s+/g, "");
+
+  const absorb = token => {
+    const bucketSet = INTENT_KEYWORD_INDEX.get(token);
+    if (bucketSet) bucketSet.forEach(bucket => candidates.add(bucket));
+  };
+
+  absorb(normalizedClause);
+  absorb(compact);
+  tokens.forEach(absorb);
+  for (let i = 0; i < tokens.length - 1; i += 1) {
+    absorb(`${tokens[i]} ${tokens[i + 1]}`);
+  }
+
+  const out = [];
+  const seen = new Set();
+  addPreferred(out, seen);
+
+  if (!candidates.size) {
+    const fallbackEntries = baseEntries.length ? baseEntries : expandedEntries;
+    fallbackEntries.forEach(([name, list]) => {
+      if (!seen.has(name)) {
+        out.push([name, list]);
+        seen.add(name);
+      }
+    });
+    return out;
+  }
+
+  candidates.forEach(name => {
+    const list = INTENT_LIB_EXPANDED[name];
+    if (Array.isArray(list) && !seen.has(name)) {
+      out.push([name, list]);
+      seen.add(name);
+    }
+  });
+
+  return out.length ? out : (baseEntries.length ? baseEntries : expandedEntries);
+}
+
+function extractIntentKeysFromInput(userText) {
+  const normalized = normalizeInput(userText);
+  if (!normalized) return { intents: [], confidence: 0, bestIntent: null };
+
+  if (!INTENT_ENGINE_READY) scheduleIntentEngineInitialization();
+
+  const intents = new Set();
+  const clauses = splitIntentClauses(normalized);
+  let bestScore = 0;
+  let bestIntent = null;
+  const activeCase = appState.activeCase || {};
+  const caseId = normalizeInput(activeCase.id || "");
+  const domainTag = normalizeInput(activeCase.domain || (appState.student && appState.student.domain) || "");
+  let specialtyKey = "";
+  if (caseId.includes("sur") || domainTag.includes("surgery")) specialtyKey = "SUR";
+  else if (caseId.includes("ped") || domainTag.includes("pediatric")) specialtyKey = "PED";
+  else if (caseId.includes("gyn") || domainTag.includes("gyne")) specialtyKey = "GYN";
+
+  const addIntent = intent => {
+    if (!intent) return;
+    intents.add(intent);
+  };
+
+  clauses.forEach((clause) => {
+    const normalizedClause = normalizeInput(clause);
+    if (!normalizedClause) return;
+
+    if (/\b(name|naam)\b/.test(normalizedClause)) {
+      addIntent("name");
+      if (bestScore < 0.95) {
+        bestScore = 0.95;
+        bestIntent = "name";
+      }
+    }
+    if (/\b(age|umar|how old|kitne saal|kitni umar)\b/.test(normalizedClause)) {
+      addIntent("age");
+      if (bestScore < 0.95) {
+        bestScore = 0.95;
+        bestIntent = "age";
+      }
+    }
+    if (/\b(occupation|job|kaam|pesha|work)\b/.test(normalizedClause)) {
+      addIntent("occupation");
+      if (bestScore < 0.92) {
+        bestScore = 0.92;
+        bestIntent = "occupation";
+      }
+    }
+    if (/\b(address|residence|rehte|pata|kahan se)\b/.test(normalizedClause)) {
+      addIntent("address");
+      if (bestScore < 0.92) {
+        bestScore = 0.92;
+        bestIntent = "address";
+      }
+    }
+
+    if (/\b(anything else|anything more|aur kuch|aur kya|aur symptom|other symptoms)\b/.test(normalizedClause)) {
+      addIntent("associated_symptoms");
+    }
+
+    const sortedIntentEntries = getOrderedIntentEntriesForClause(normalizedClause, specialtyKey);
+    sortedIntentEntries.forEach(([bucket, keywords]) => {
+      const score = bestKeywordSimilarity(normalizedClause, keywords);
+      if (score > bestScore) {
+        bestScore = score;
+        bestIntent = bucket;
+      }
+      if (score >= INTENT_FUZZY_THRESHOLD) {
+        mapBucketToIntents(bucket, normalizedClause).forEach(addIntent);
+      }
+    });
+
+    Object.entries(INTENT_LIB_SYSTEMS).forEach(([bucket, keywords]) => {
+      const score = bestKeywordSimilarity(normalizedClause, keywords);
+      if (score > bestScore) {
+        bestScore = score;
+        bestIntent = bucket;
+      }
+      if (score < INTENT_FUZZY_THRESHOLD) return;
+      if (bucket === "fever") {
+        addIntent("fever_detail");
+        if (/\b(temp|temperature|thermometer|how high|value|reading|kitna bukhar)\b/.test(normalizedClause)) addIntent("temperature_value");
+      } else if (bucket === "respiratory") {
+        if (/\b(cough|khansi|sputum|balgham)\b/.test(normalizedClause)) addIntent("cough_detail");
+        if (/\b(wheeze|wheezing|seeti)\b/.test(normalizedClause)) addIntent("wheeze_detail");
+        if (/\b(saans|breath|shortness|breathless)\b/.test(normalizedClause)) addIntent("breathlessness_detail");
+      } else if (bucket === "gi") {
+        const hasNauseaCue = /\b(nausea|matli|malti)\b/.test(normalizedClause) || /(dil kharab|mann kharab|man kharab)/.test(normalizedClause);
+        const hasVomitCue = /\b(vomit|vomiting|ulti)\b/.test(normalizedClause);
+        if (hasNauseaCue) addIntent("nausea_detail");
+        if (hasVomitCue || hasNauseaCue) addIntent("vomiting_detail");
+        if (/\b(diarrhea|dast|stool|motions|constipation|qabz|bowel)\b/.test(normalizedClause)) addIntent("bowel_detail");
+        if (/\b(appetite|bhook|khana)\b/.test(normalizedClause)) addIntent("appetite_loss_detail");
+      } else if (bucket === "surgery_lump") {
+        if (/\b(size|big|bara|cm|dimension)\b/.test(normalizedClause)) addIntent("surgery_size");
+        if (/\b(shape|gol|round|oval)\b/.test(normalizedClause)) addIntent("surgery_shape");
+        if (/\b(skin|red|overlying|surrounding)\b/.test(normalizedClause)) addIntent("surgery_skin");
+        if (/\b(discharge|pus|peep|bleed|bleeding|khoon)\b/.test(normalizedClause)) addIntent("surgery_discharge");
+      } else if (bucket === "peds_vax") {
+        addIntent("vaccination_history");
+      } else if (bucket === "gyn_cycle") {
+        addIntent("menstrual_history");
+        if (/\b(lmp|last period|aakhri)\b/.test(normalizedClause)) addIntent("lmp_history");
+        if (/\b(bleed|khoon|khon|pad|clot|thakk)\b/.test(normalizedClause)) {
+          addIntent("bleeding_quantity");
+          addIntent("clots_detail");
+        }
+      }
+    });
+
+    Object.entries(CLINICAL_INTENT_MAP || {}).forEach(([section, sectionMap]) => {
+      const mapper = CLINICAL_NODE_TO_INTENT[section];
+      if (!mapper || !sectionMap || typeof sectionMap !== "object") return;
+      Object.entries(sectionMap).forEach(([node, phrases]) => {
+        if (!Array.isArray(phrases)) return;
+        const score = bestKeywordSimilarity(normalizedClause, phrases);
+        if (score > bestScore) {
+          bestScore = score;
+          bestIntent = node;
+        }
+        if (score >= INTENT_FUZZY_THRESHOLD) {
+          const mappedIntent = mapper[node];
+          if (mappedIntent) addIntent(mappedIntent);
+        }
+      });
+    });
+
+    if (/\b(name and age|what is your name and age|your name and age|naam aur umar|naam aur age|naam aur saal)\b/.test(normalizedClause)) {
+      addIntent("name");
+      addIntent("age");
+      if (bestScore < 1) {
+        bestScore = 1;
+        bestIntent = "name";
+      }
+    }
+    if (/\b(kab se|kabse|since when|kitne din|kitna arsa|kitne arsay|how long|duration)\b/.test(normalizedClause)) addIntent("duration");
+    if (/\b(when did .*start|when did it start|when did this start|when did the pain start|when did the fever start|kab hua|kab shuru hua|how did it begin|how did it start)\b/.test(normalizedClause)) addIntent("onset");
+    if (/\b(what makes it worse|kis se barhta|worse with|walking|chalne se|harkat|tez)\b/.test(normalizedClause)) addIntent("aggravating");
+    if (/\b(what makes it better|what relieves|kis se kam|better with|aaram|rest|letne se)\b/.test(normalizedClause)) addIntent("relieving");
+    if (/\b(kis se barhta).*(kis se kam)|(worse).*(better)|(barhta).*(kam)\b/.test(normalizedClause)) {
+      addIntent("aggravating");
+      addIntent("relieving");
+    }
+
+    if (intents.size === 0) {
+      const legacyIntent = matchIntent(normalizedClause);
+      if (legacyIntent) addIntent(legacyIntent);
+    }
+  });
+
+  const normalizedComplaint = normalizeInput((activeCase && activeCase.complaint) || "");
+  const surgeryContext = specialtyKey === "SUR" || /surg/.test(caseId) || /\b(swelling|lump|ganth|soojan|ulcer|zakhm)\b/.test(normalizedComplaint);
+  const gyneContext = specialtyKey === "GYN" || /gyn|gyne/.test(caseId) || /\b(period|mahwari|bleeding|discharge|amenorrhea)\b/.test(normalizedComplaint);
+  const medsQuery = /\b(medication|medications|medicine|medicines|meds|drug|drugs|dawa|dawai|treatment|on treatment|regular medicine|regular meds|koi dawa|taking any medicine|taking any medication|are you taking|are you on)\b/.test(normalized);
+  const reliefCue = /\b(relief|relieves|relieved|better|kam|aaram|rest|letne se|makes it better|what relieves)\b/.test(normalized);
+  const familyHistoryQuery = /\b(any family history|family history|khandan|ghar mein kisi ko|family mein kisi ko)\b/.test(normalized);
+  const birthHistoryQuery = /\b(birth history|paidaish|delivery history|born at term|born)\b/.test(normalized);
+  const pastHistoryQuery = /\b(past history|past medical history|past illness|previous illness|medical history|purani bimari|pehle se)\b/.test(normalized);
+  const whereLocationQuery = /\b(where|kahan|kidhar|kis jagah|location|site)\b/.test(normalized);
+  const complaintTrigger = /\b(why are you here|what brings you|kya masla|problem kya|takleef)\b/.test(normalized);
+  const neuroSymptomQuery = /\b(numbness|dizziness|chakkar|behoshi|tingling|sunpan|neurolog)\b/.test(normalized);
+  const feedingQuery = /\b(feeding|feed|doodh|milk|khana)\b/.test(normalized);
+  const explicitNameAgeQuery = /\b(name and age|what is your name and age|your name and age|naam aur umar|naam aur age|naam aur saal)\b/.test(normalized);
+  const allergyOnlyQuery = /\b(any known allergies|any allergies|allergy|allergic|drug allergy|allergy to drug)\b/.test(normalized);
+  const durationOnlyQuery = /\b(kab se|kabse|since when|how long|duration|kitne din|kitna arsa|kitne arsay)\b/.test(normalized);
+  const explicitOnsetQuery = /\b(when did .*start|when did it start|when did this start|when did the pain start|when did the fever start|kab shuru hua|kab hua|how did it begin|how did it start)\b/.test(normalized);
+  const gyneItchingQuery = /\b(any itching|itching|khujli)\b/.test(normalized);
+  const gyneSmellQuery = /\b(any bad smell|bad smell|smell|badbu|foul)\b/.test(normalized);
+  const gyneClotQuery = /\b(any clots|clots|thakk|thakay)\b/.test(normalized);
+  const surgerySkinQuery = /\b(skin red|redness|skin change|skin ka rang|upar ki skin|overlying skin|surkhi|skin red hai)\b/.test(normalized);
+  const surgeryMobilityQuery = /\b(hilti|move|moves|mobile|fixed|stuck|juda|attached)\b/.test(normalized);
+  const surgeryCoughImpulseQuery = /\b(((khansi|cough).*(barh|barhta|barhti|worse|increase|bigger|zyada))|((barh|barhta|barhti|worse|increase|bigger|zyada).*(khansi|cough))|cough impulse)\b/.test(normalized);
+
+  if (/(dil kharab|mann kharab|man kharab|\bmalti\b|\bmatli\b)/.test(normalized)) {
+    addIntent("nausea_detail");
+  }
+
+  if (durationOnlyQuery && !explicitOnsetQuery) {
+    addIntent("duration");
+    intents.delete("onset");
+  }
+  if (explicitOnsetQuery) {
+    addIntent("onset");
+  }
+
+  if (/\b(what makes it worse|kis se barhta|worse with|chalne se|walking|harkat|movement|tez hota)\b/.test(normalized)) {
+    addIntent("aggravating");
+    if (!/\b(kis se kam|what relieves|what makes it better|better with|relief)\b/.test(normalized)) {
+      intents.delete("relieving");
+    }
+  }
+  if (/\b(what makes it better|what relieves|kis se kam|better with|aaram|rest|letne se)\b/.test(normalized)) {
+    addIntent("relieving");
+    if (!/\b(kis se barhta|what makes it worse|worse with)\b/.test(normalized)) {
+      intents.delete("aggravating");
+    }
+    intents.delete("social_history");
+  }
+
+  if (surgeryContext && /\b(bleed|bleeding|khoon|khon|discharge|pus|peep|risav)\b/.test(normalized)) {
+    addIntent("surgery_discharge");
+    intents.delete("radiation");
+  }
+  if (surgeryContext && surgerySkinQuery) {
+    addIntent("surgery_skin");
+    intents.delete("fever_detail");
+    intents.delete("associated_symptoms");
+  }
+  if (surgeryContext && surgeryMobilityQuery) {
+    addIntent("surgery_mobility");
+    intents.delete("radiation");
+  }
+  if (surgeryContext && surgeryCoughImpulseQuery) {
+    addIntent("surgery_cough_impulse");
+    intents.delete("aggravating");
+  }
+
+  if (medsQuery && !reliefCue) {
+    addIntent("medications");
+    intents.delete("relieving");
+    intents.delete("aggravating");
+  }
+
+  if (allergyOnlyQuery) {
+    addIntent("allergies");
+    intents.delete("medications");
+  }
+
+  if (familyHistoryQuery) {
+    addIntent("family_history");
+    intents.delete("consent_request");
+  }
+  if (birthHistoryQuery) {
+    addIntent("birth_history");
+    intents.delete("consent_request");
+  }
+  if (pastHistoryQuery) {
+    addIntent("past_medical_history");
+    intents.delete("consent_request");
+  }
+
+  if (whereLocationQuery && !complaintTrigger) {
+    addIntent("pain_location");
+    intents.delete("chief_complaint");
+    intents.delete("onset");
+    intents.delete("duration");
+    intents.delete("pain_character");
+    intents.delete("severity");
+    intents.delete("fever_detail");
+    intents.delete("associated_symptoms");
+  }
+
+  if (neuroSymptomQuery) {
+    addIntent("neuro_detail");
+    intents.delete("surgery_shape");
+  }
+
+  if (feedingQuery && specialtyKey === "PED") {
+    addIntent("feeding_history");
+    if (!/\b(fever|bukhar)\b/.test(normalized)) intents.delete("fever_detail");
+  }
+
+  if (gyneItchingQuery) {
+    addIntent("itching_detail");
+    intents.delete("pain_character");
+    intents.delete("severity");
+  }
+  if (gyneSmellQuery) {
+    addIntent("smell_detail");
+    intents.delete("pain_character");
+    intents.delete("severity");
+  }
+  if (gyneClotQuery) {
+    addIntent("clots_detail");
+    addIntent("bleeding_quantity");
+    intents.delete("menstrual_history");
+  }
+
+  if (explicitNameAgeQuery) {
+    addIntent("name");
+    addIntent("age");
+    if (!complaintTrigger) {
+      intents.delete("chief_complaint");
+      intents.delete("family_history");
+    }
+  }
+
+  if (gyneContext && /\b(lmp|last period|aakhri period|aakhri mahwari|last menstrual|period kab hua|period kab)\b/.test(normalized)) {
+    addIntent("lmp_history");
+    intents.delete("onset");
+    intents.delete("duration");
+    intents.delete("chief_complaint");
+  }
+
+  const ordered = [...intents].sort((a, b) => {
+    const ia = INTENT_PRIORITY.indexOf(a);
+    const ib = INTENT_PRIORITY.indexOf(b);
+    if (ia === -1 && ib === -1) return a.localeCompare(b);
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
+
+  return { intents: ordered, confidence: bestScore, bestIntent };
+}
+
+function handleUserMessage(userText) {
+  const lang = detectMatrixLanguage(userText);
+  const normalizedInput = normalizeInput(userText);
+  const extracted = extractIntentKeysFromInput(userText);
+  const intents = extracted.intents || [];
+  const supportedIntents = filterIntentsByFirstYearRubric(intents, appState);
+  let resolvedIntents = supportedIntents.length ? supportedIntents : intents;
+  const surgerySpecificIntents = new Set([
+    "surgery_size",
+    "surgery_shape",
+    "surgery_count",
+    "surgery_skin",
+    "surgery_reducible",
+    "surgery_mobility",
+    "surgery_cough_impulse",
+    "surgery_discharge"
+  ]);
+  const gyneSpecificIntents = new Set([
+    "menstrual_history",
+    "lmp_history",
+    "obstetric_history",
+    "pregnancy_possibility",
+    "discharge_detail",
+    "itching_detail",
+    "smell_detail",
+    "bleeding_quantity",
+    "clots_detail"
+  ]);
+  const extractedSurgerySpecific = intents.filter(intent => surgerySpecificIntents.has(intent));
+  const extractedGyneSpecific = intents.filter(intent => gyneSpecificIntents.has(intent));
+  if (extractedSurgerySpecific.length) {
+    resolvedIntents = [...new Set(extractedSurgerySpecific)];
+  } else if (extractedGyneSpecific.length) {
+    resolvedIntents = [...new Set(extractedGyneSpecific)];
+  }
+  const confidenceScore = typeof extracted.confidence === "number" ? extracted.confidence : 0;
+  const hasPublicIntent = resolvedIntents.some(intent => PRECONSENT_ALLOWED_INTENTS.has(intent));
+  const explicitConsentPhrase = /\b(may i|can i|permission|consent|ijazat|allow|proceed|shuru kar|history (?:le|lena|leni|loon|take)|ask (?:you )?(?:some|few)? ?questions)\b/.test(normalizedInput);
+
+  if (resolvedIntents.includes("consent_request") && !explicitConsentPhrase && resolvedIntents.some(intent => intent !== "consent_request")) {
+    resolvedIntents = resolvedIntents.filter(intent => intent !== "consent_request");
+  }
+
+  appState.lastClassification = {
+    primaryIntent: resolvedIntents[0] || extracted.bestIntent || null,
+    allIntents: resolvedIntents,
+    confidence: confidenceScore >= 0.85 ? "high" : (confidenceScore >= INTENT_FUZZY_THRESHOLD ? "medium" : "low")
+  };
+
+  if (!resolvedIntents.length) {
+    logUnknownInput(userText);
+    return DEFAULT_UNKNOWN_REPLY;
+  }
+
+  if (resolvedIntents.includes("consent_request")) {
+    appState.consentStatus = true;
+    appState.consentTaken = true;
+    appState.conversationStage = "CONSENT";
+    appState.asked.add("consent_request");
+    appState.disclosed.add("consent_request");
+    appState.lastIntentKey = "consent_request";
+    scoreQuestion("consent_request");
+    resolvedIntents = resolvedIntents.filter(intent => intent !== "consent_request");
+    if (!resolvedIntents.length) {
+      return lang === "roman" ? "Ji doctor, zaroor. Poochein." : "Yes doctor, please go ahead.";
+    }
+  }
+
+  if (appState.complaintElicited && resolvedIntents.includes("chief_complaint") && resolvedIntents.some(intent => intent !== "chief_complaint")) {
+    resolvedIntents = resolvedIntents.filter(intent => intent !== "chief_complaint");
+  }
+
+  const hasClinicalIntent = resolvedIntents.some(intent => CLINICAL_INTENTS.has(intent));
+  if (hasClinicalIntent && !appState.consentStatus) {
+    const publicOnly = resolvedIntents.filter(intent => PRECONSENT_ALLOWED_INTENTS.has(intent));
+    if (publicOnly.length) {
+      resolvedIntents = [...new Set(publicOnly)];
+    } else {
+      return EARLY_CONSENT_REMINDER;
+    }
+  }
+
+  const validation = validateIntentAgainstStage(resolvedIntents, appState);
+  if (!validation.ok) {
+    if (isUnclearReply(validation.message) || validation.message === DEFAULT_UNKNOWN_REPLY) logUnknownInput(userText);
+    return validation.message;
+  }
+
+  let orderedIntents = [...new Set(resolvedIntents)];
+  const hasNameAgeCombo = orderedIntents.includes("name") && orderedIntents.includes("age");
+  const hasAggRelCombo = orderedIntents.includes("aggravating") && orderedIntents.includes("relieving");
+  const explicitAggRelCombo = hasAggRelCombo
+    && /\b(kis se barhta).*(kis se kam)|(worse).*(better)|(barhta).*(kam)\b/.test(normalizedInput);
+  const locationQuery = /\b(where|kahan|kidhar|kis jagah|location|site)\b/.test(normalizedInput);
+  const complaintQuery = /\b(why are you here|what brings you|kya masla|problem kya|takleef)\b/.test(normalizedInput);
+  const durationQuery = /\b(kab se|kabse|since when|how long|duration|kitne din|kitna arsa|kitne arsay)\b/.test(normalizedInput);
+  const onsetQuery = /\b(when did .*start|when did it start|when did this start|when did the pain start|when did the fever start|kab shuru hua|kab hua|how did it begin|how did it start)\b/.test(normalizedInput);
+  const characterQuery = /\b(what kind|kis type|kis tarah|kaisa dard|character)\b/.test(normalizedInput);
+  const severityQuery = /\b(how severe|kitna|shiddat|severity|pain score|scale)\b/.test(normalizedInput);
+  const radiationQuery = /\b(does it radiate|radiate|spread|phail|kahin aur jata)\b/.test(normalizedInput);
+  const medsOnlyQuery = /\b(medication|medications|medicine|medicines|meds|drug|drugs|dawa|dawai|regular medicine|on treatment|are you taking)\b/.test(normalizedInput)
+    && !/\b(relief|relieves|relieved|better|kam|aaram|rest|letne se|makes it better|what relieves)\b/.test(normalizedInput);
+  const familyOnlyQuery = /\b(any family history|family history|khandan|ghar mein kisi ko|family mein kisi ko)\b/.test(normalizedInput);
+  const allergyOnlyQuery = /\b(any known allergies|any allergies|allergy|allergic|drug allergy)\b/.test(normalizedInput);
+  const neuroOnlyQuery = /\b(numbness|dizziness|chakkar|behoshi|tingling|sunpan|neurolog)\b/.test(normalizedInput);
+  const feedingOnlyQuery = /\b(feeding|feed|doodh|milk)\b/.test(normalizedInput);
+  const birthOnlyQuery = /\b(birth history|paidaish|delivery history|born)\b/.test(normalizedInput);
+  const lmpOnlyQuery = /\b(lmp|last period|aakhri period|aakhri mahwari|last menstrual)\b/.test(normalizedInput);
+  const itchingOnlyQuery = /\b(any itching|itching|khujli)\b/.test(normalizedInput);
+  const smellOnlyQuery = /\b(any bad smell|bad smell|smell|badbu|foul)\b/.test(normalizedInput);
+  const clotsOnlyQuery = /\b(any clots|clots|thakk|thakay)\b/.test(normalizedInput);
+  const surgerySkinOnlyQuery = /\b(skin red|redness|skin change|skin ka rang|upar ki skin|overlying skin|surkhi|skin red hai)\b/.test(normalizedInput);
+  const surgeryMobilityOnlyQuery = /\b(hilti|move|moves|mobile|fixed|stuck|juda|attached)\b/.test(normalizedInput);
+  const surgeryCoughImpulseOnlyQuery = /\b(((khansi|cough).*(barh|barhta|barhti|worse|increase|bigger|zyada))|((barh|barhta|barhti|worse|increase|bigger|zyada).*(khansi|cough))|cough impulse)\b/.test(normalizedInput);
+
+  let forcedPrimaryIntent = null;
+  if (lmpOnlyQuery && orderedIntents.includes("lmp_history")) forcedPrimaryIntent = "lmp_history";
+  else if (locationQuery && !complaintQuery && orderedIntents.includes("pain_location")) forcedPrimaryIntent = "pain_location";
+  else if (radiationQuery && orderedIntents.includes("radiation")) forcedPrimaryIntent = "radiation";
+  else if (characterQuery && orderedIntents.includes("pain_character")) forcedPrimaryIntent = "pain_character";
+  else if (neuroOnlyQuery && orderedIntents.includes("neuro_detail")) forcedPrimaryIntent = "neuro_detail";
+  else if (feedingOnlyQuery && orderedIntents.includes("feeding_history")) forcedPrimaryIntent = "feeding_history";
+  else if (birthOnlyQuery && orderedIntents.includes("birth_history")) forcedPrimaryIntent = "birth_history";
+  else if (itchingOnlyQuery && orderedIntents.includes("itching_detail")) forcedPrimaryIntent = "itching_detail";
+  else if (smellOnlyQuery && orderedIntents.includes("smell_detail")) forcedPrimaryIntent = "smell_detail";
+  else if (clotsOnlyQuery && orderedIntents.includes("clots_detail")) forcedPrimaryIntent = "clots_detail";
+  else if (surgerySkinOnlyQuery && orderedIntents.includes("surgery_skin")) forcedPrimaryIntent = "surgery_skin";
+  else if (surgeryMobilityOnlyQuery && orderedIntents.includes("surgery_mobility")) forcedPrimaryIntent = "surgery_mobility";
+  else if (surgeryCoughImpulseOnlyQuery && orderedIntents.includes("surgery_cough_impulse")) forcedPrimaryIntent = "surgery_cough_impulse";
+  else if (onsetQuery && orderedIntents.includes("onset")) forcedPrimaryIntent = "onset";
+  else if (durationQuery && orderedIntents.includes("duration")) forcedPrimaryIntent = "duration";
+  else if (severityQuery && orderedIntents.includes("severity")) forcedPrimaryIntent = "severity";
+  else if (medsOnlyQuery && orderedIntents.includes("medications")) forcedPrimaryIntent = "medications";
+  else if (allergyOnlyQuery && orderedIntents.includes("allergies")) forcedPrimaryIntent = "allergies";
+  else if (familyOnlyQuery && orderedIntents.includes("family_history")) forcedPrimaryIntent = "family_history";
+
+  if (hasNameAgeCombo) {
+    orderedIntents = ["name", "age"];
+  } else if (explicitAggRelCombo) {
+    orderedIntents = ["aggravating", "relieving"];
+  } else if (forcedPrimaryIntent) {
+    orderedIntents = [forcedPrimaryIntent];
+  } else if (orderedIntents.length > 1) {
+    const primaryIntent = orderedIntents.find(intent => INTENT_PRIORITY.includes(intent)) || orderedIntents[0];
+    orderedIntents = primaryIntent ? [primaryIntent] : [];
+  }
+
+  if (!orderedIntents.length) {
+    logUnknownInput(userText);
+    return DEFAULT_UNKNOWN_REPLY;
+  }
+
+  const replies = [];
+  if (hasNameAgeCombo) {
+    const preferredLang = lang === "roman" ? "roman" : "english";
+    const nameValue = resolveCaseDataValue(appState.activeCase, "name", preferredLang);
+    const ageValue = resolveCaseDataValue(appState.activeCase, "age", preferredLang);
+    const asksChildBiodata = /\b(child|kid|baby|bacha|bache|bachay|bachi)\b/.test(normalizedInput);
+    const isPediatricCase = normalizeInput((appState.student && appState.student.domain) || "").includes("pediatric");
+    if (nameValue && ageValue) {
+      const rawName = String(nameValue).trim();
+      const rawAge = String(ageValue).trim();
+      const cleanedName = rawName
+        .replace(/[.!?]/g, " ")
+        .replace(/\b(my|mera|meri|mujhe|main|mein|child|children|bacha|bache|bachay|bachi|ka|ki|ke|name|naam|is|hai|hain|s)\b/gi, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+      const safeName = (cleanedName || rawName.replace(/[.!?]/g, "").trim()).replace(/^['"`]+|['"`]+$/g, "").trim();
+      const ageNumber = (rawAge.match(/\d{1,3}/) || [null])[0];
+      if (isPediatricCase && lang === "roman" && safeName && ageNumber) {
+        replies.push(`Bache ka naam ${safeName} hai aur us ki umar ${ageNumber} saal hai.`);
+      } else if (isPediatricCase && (lang === "en" || lang === "english") && safeName && ageNumber) {
+        replies.push(`My child's name is ${safeName} and age is ${ageNumber} ${Number(ageNumber) === 1 ? "year" : "years"} old.`);
+      } else if (lang === "roman" && safeName && ageNumber) {
+        replies.push(`Mera naam ${safeName} hai aur meri umar ${ageNumber} saal hai.`);
+      } else if ((lang === "en" || lang === "english") && safeName && ageNumber) {
+        replies.push(`My name is ${safeName} and I am ${ageNumber} years old.`);
+      } else {
+        const connector = lang === "roman" ? " aur " : " and ";
+        const lhs = rawName.replace(/[.!?]+$/g, "");
+        const rhsRaw = rawAge.replace(/[.!?]+$/g, "");
+        const rhs = rhsRaw ? rhsRaw.charAt(0).toLowerCase() + rhsRaw.slice(1) : rhsRaw;
+        replies.push(normalizeResponseSentence(`${lhs}${connector}${rhs}`));
+      }
+    }
+  } else if (orderedIntents.length === 2 && orderedIntents[0] === "aggravating" && orderedIntents[1] === "relieving") {
+    const aggravatingReply = getRubricAnswer(appState.activeCase, INTENT_RESPONSE_FIELD_MAP.aggravating, lang);
+    const relievingReply = getRubricAnswer(appState.activeCase, INTENT_RESPONSE_FIELD_MAP.relieving, lang);
+    if (aggravatingReply) replies.push(aggravatingReply);
+    if (relievingReply) replies.push(relievingReply);
+  }
+
+  orderedIntents.forEach(intent => {
+    if (hasNameAgeCombo && (intent === "name" || intent === "age")) return;
+    if (orderedIntents.length === 2 && orderedIntents[0] === "aggravating" && orderedIntents[1] === "relieving" && (intent === "aggravating" || intent === "relieving")) return;
+    const mappedField = INTENT_RESPONSE_FIELD_MAP[intent] || intent;
+    const reply = getRubricAnswer(appState.activeCase, mappedField, lang);
+    if (reply) {
+      replies.push(reply);
+      appState.asked.add(intent); // requested state sync
+    }
+  });
+  const finalReply = [...new Set(replies)].join(" ").trim();
+  if (!finalReply) {
+    logUnknownInput(userText);
+    return DEFAULT_UNKNOWN_REPLY;
+  }
+
+  orderedIntents.forEach(intent => scoreQuestion(intent));
+  if (orderedIntents.includes("name")) {
+    appState.rubric.forEach(item => {
+      const l = normalizeInput(item.label || "");
+      if (item.key === "b_name" || l.includes("name was")) {
+        appState.asked.add(item.key);
+        appState.partialAsked.delete(item.key);
+      }
+    });
+  }
+  if (orderedIntents.includes("age")) {
+    appState.rubric.forEach(item => {
+      const l = normalizeInput(item.label || "");
+      if (item.key === "b_age" || l.includes("age was")) {
+        appState.asked.add(item.key);
+        appState.partialAsked.delete(item.key);
+      }
+    });
+  }
+  const historyIntentHits = orderedIntents.filter(intent => !NON_HISTORY_COUNT_INTENTS.has(intent)).length;
+  if (historyIntentHits > 0) {
+    appState.historyQuestionCount += historyIntentHits;
+    updateEndButtonState();
+  }
+
+  updateConversationStateFromIntents(orderedIntents, appState, appState.activeCase);
+  orderedIntents.forEach(intent => {
+    appState.lastIntentKey = intent;
+    appState.disclosed.add(intent);
+    const mappedField = INTENT_RESPONSE_FIELD_MAP[intent] || intent;
+    appState.disclosed.add(mappedField);
+  });
+  return finalReply;
 }
 
 function answerFromCase(userText) {
@@ -6533,8 +8890,23 @@ function startSimulation() {
     updateStartButtonState();
     return;
   }
+  if (!INTENT_ENGINE_READY) {
+    setStartButtonBrainLoading(true);
+    scheduleIntentEngineInitialization();
+    if (!START_WHEN_BRAIN_READY_QUEUED) {
+      START_WHEN_BRAIN_READY_QUEUED = true;
+      onIntentEngineReady(() => {
+        START_WHEN_BRAIN_READY_QUEUED = false;
+        setStartButtonBrainLoading(false);
+        startSimulation();
+      });
+    }
+    return;
+  }
   const yr = document.getElementById("acadYear").value || "1st Year MBBS";
   appState.student = { name: nm, roll: rl, year: yr, domain: selectedDomain };
+  appState.studentName = nm;
+  appState.rollId = rl;
   appState.activeCase = buildCase(selectedDomain);
   appState.rubric = buildRubric(selectedDomain, appState.activeCase.complaint);
   appState.historyQuestionCount = 0;
@@ -6545,7 +8917,10 @@ function startSimulation() {
   appState.introduced = false;
   appState.purposeAcknowledged = false;
   appState.consentTaken = false;
+  appState.consentStatus = false;
   appState.complaintElicited = false;
+  appState.socratesCount = 0;
+  appState.socratesCovered = new Set();
   appState.stage = "GREETING";
   appState.lastIntentKey = null;
   appState.lastClassification = null;
@@ -6565,6 +8940,25 @@ function startSimulation() {
   addBubble("context", appState.activeCase.contextLine);
 }
 
+function setStartButtonBrainLoading(isLoading) {
+  const startBtn = document.getElementById("startBtn");
+  if (!startBtn) return;
+  if (!startBtn.dataset) startBtn.dataset = {};
+  if (isLoading) {
+    if (!startBtn.dataset.originalLabel) {
+      startBtn.dataset.originalLabel = startBtn.textContent || "INITIALIZE SIMULATION";
+    }
+    startBtn.dataset.brainLoading = "1";
+    startBtn.disabled = true;
+    startBtn.textContent = "Loading Clinical Brain...";
+    return;
+  }
+  startBtn.dataset.brainLoading = "";
+  const originalLabel = startBtn.dataset.originalLabel || "INITIALIZE SIMULATION";
+  startBtn.textContent = originalLabel;
+  updateStartButtonState();
+}
+
 function resetSimulationState(preserveStudent = false) {
   const remembered = preserveStudent ? { ...appState.student } : { name: "", roll: "", year: "1st Year MBBS", domain: selectedDomain };
   appState.activeCase = null;
@@ -6580,7 +8974,10 @@ function resetSimulationState(preserveStudent = false) {
   appState.introduced = false;
   appState.purposeAcknowledged = false;
   appState.consentTaken = false;
+  appState.consentStatus = false;
   appState.complaintElicited = false;
+  appState.socratesCount = 0;
+  appState.socratesCovered = new Set();
   appState.stage = "GREETING";
   appState.lastIntentKey = null;
   appState.lastClassification = null;
@@ -6603,7 +9000,17 @@ function updateStartButtonState() {
   const ready = Boolean(fullName && rollId);
   const startBtn = document.getElementById("startBtn");
   const hint = document.getElementById("hint");
-  if (startBtn) startBtn.disabled = !ready;
+  if (startBtn) {
+    if (!startBtn.dataset) startBtn.dataset = {};
+    const brainLoading = startBtn.dataset && startBtn.dataset.brainLoading === "1";
+    if (!brainLoading) {
+      startBtn.disabled = !ready;
+      if (!startBtn.dataset.originalLabel) {
+        startBtn.dataset.originalLabel = startBtn.textContent || "INITIALIZE SIMULATION";
+      }
+      startBtn.textContent = startBtn.dataset.originalLabel;
+    }
+  }
   if (hint) {
     hint.textContent = ready
       ? `Selected domain: ${selectedDomain}`
@@ -6656,24 +9063,19 @@ function silentlySaveData(reportHtml) {
   const tempDiv = document.createElement("div");
   tempDiv.innerHTML = reportHtml;
   const cleanText = tempDiv.innerText || tempDiv.textContent;
-
-  // The NEW live Google Apps Script Webhook
-  const webhookURL = "https://script.google.com/macros/s/AKfycbzBON-GacRmiHGoSydoWjF_6224fa8rEp0QAbHe2M0i-T_jEFOTceDMmPEEEMqlXQHmxg/exec";
-
-  fetch(webhookURL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({
-          studentName: appState.student.name,
-          rollId: appState.student.roll,
-          domain: appState.student.domain,
-          reportText: cleanText
-      })
-  }).then(res => res.json()).then(data => {
-      console.log("Score saved successfully to Google Sheet.");
-  }).catch(e => {
-      console.error("Failed to save score.", e);
-  });
+  const finalReport = cleanText;
+  fetch(SCRIPT_URL, {
+    method: "POST",
+    mode: "no-cors",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({
+      type: "FINAL_REPORT",
+      studentName: appState.studentName || (appState.student && appState.student.name) || "",
+      rollId: appState.rollId || (appState.student && appState.student.roll) || "",
+      domain: selectedDomain || (appState.student && appState.student.domain) || "",
+      reportText: finalReport
+    })
+  }).catch(() => {});
 }
 
 function returnToDomainSelection() {
@@ -7666,6 +10068,13 @@ document.getElementById("resetBtn").addEventListener("click", () => confirm("Ret
 let selectedDomain = "Medicine";
 
 syncViewportHeight();
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", () => {
+    scheduleIntentEngineInitialization();
+  }, { once: true });
+} else {
+  scheduleIntentEngineInitialization();
+}
 updateStartButtonState();
 updateEndButtonState();
 window.addEventListener("resize", syncViewportHeight);
